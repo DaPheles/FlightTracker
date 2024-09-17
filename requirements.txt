@@ -1,0 +1,4 @@
+jsons
+requests
+pillow
+FlightRadarAPI
