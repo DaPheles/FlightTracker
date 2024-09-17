@@ -38,13 +38,10 @@ class FlightTracker(tk.Tk):
     self.fr_api = FlightRadar24API()
     self.fr_api.set_flight_tracker_config(vehicles=0)
 
-    # get boundary of request
+    # compute pixel position of home location
     self.homeX, self.homeY = latlngToPixel(self.home, self.zoom)
-    distX, distY = (self.mapGrid[0]+1.5)/2 * self.tileSize, (self.mapGrid[1]+1.5)/2 * self.tileSize
-    boundTL = pixelToLatlng((self.homeX-distX, self.homeY-distY), self.zoom)
-    boundBR = pixelToLatlng((self.homeX+distX, self.homeY+distY), self.zoom)
-    self.bounds=f'{boundTL[0]:.6f},{boundBR[0]:.6f},{boundTL[1]:.6f},{boundBR[1]:.6f}'
-    #print(self.bounds)
+    # get configuration depending boundaries
+    self.bounds = self.getBounds()
     
     # load sprites
     self.sprites = Sprites([25,30,35])  # available sizes: 25,30,35,80
@@ -95,6 +92,12 @@ class FlightTracker(tk.Tk):
     #self.fullscreen = False
     #self.bind('<F12>', self.toggleFullscreen)
     #self.geometrySave = None
+
+  def getBounds(self):
+    distX, distY = (self.mapGrid[0]+1.5)/2 * self.tileSize, (self.mapGrid[1]+1.5)/2 * self.tileSize
+    boundTL = pixelToLatlng((self.homeX-distX, self.homeY-distY), self.zoom)
+    boundBR = pixelToLatlng((self.homeX+distX, self.homeY+distY), self.zoom)
+    return f'{boundTL[0]:.6f},{boundBR[0]:.6f},{boundTL[1]:.6f},{boundBR[1]:.6f}'
 
   def toggleFullscreen(self, event):
     ''' Fullscreen toggle magic, too fuzzy for now to be active '''
