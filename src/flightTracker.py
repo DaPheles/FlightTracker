@@ -219,7 +219,7 @@ class FlightTracker(tk.Tk):
     # END cycle through all flights
 
     # lift all plane icons, update old flights
-    for id in self.flights:
+    for id in list(self.flights.keys()):
       if now - self.flights[id].last_seen() > self.maxFlightAge:
         # delete flight if no new data arrived for more than 5 minutes
         # reason: either out of range or landed
