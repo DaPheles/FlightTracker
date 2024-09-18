@@ -135,7 +135,7 @@ class FollowFlight:
 
   def getFlightsData(self, bounds):
     try:
-      return self.fr_api.get_flights(bounds=bounds, flight=self.flight)
+      return self.fr_api.get_flights(bounds=bounds, flight_id=self.flight)
     except:
       return list()
 
