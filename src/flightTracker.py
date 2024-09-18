@@ -1,7 +1,7 @@
 #!/usr/bin/python
 
 from configparser import ConfigParser
-from FlightRadar24.api import FlightRadar24API
+from FlightRadar24_patch.api import FlightRadar24API
 from sprites import Sprites
 from flight import Flight
 from tiles import Tiles

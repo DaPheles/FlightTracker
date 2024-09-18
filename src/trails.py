@@ -4,7 +4,7 @@
 
 import json
 import time
-from FlightRadar24.api import FlightRadar24API
+from FlightRadar24_patch.api import FlightRadar24API
 from coords import *
 from tiles import Tiles
 from helper import Dict2Class

@@ -2,7 +2,7 @@
     helper class to handle airplane flights from FlightRadar24 histories or current locations
 '''
 
-from FlightRadar24.api import FlightRadar24API
+from FlightRadar24_patch.api import FlightRadar24API
 from hover import CanvasToolTip
 from coords import *
 import tkinter as tk

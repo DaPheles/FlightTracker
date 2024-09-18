@@ -2,7 +2,7 @@
     Application to follow flights using FlightRadar24 API and Google Maps tiles
 '''
 
-from FlightRadar24.api import FlightRadar24API
+from FlightRadar24_patch.api import FlightRadar24API
 from configparser import ConfigParser
 from hover import CanvasToolTip
 from sprites import Sprites

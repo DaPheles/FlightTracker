@@ -1,3 +1,0 @@
-[submodule "src/FlightRadarAPI"]
-	path = src/FlightRadarAPI
-	url = https://github.com/DaPheles/FlightRadarAPI.git
