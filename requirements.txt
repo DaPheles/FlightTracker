@@ -1,4 +1,6 @@
 jsons
 requests
 pillow
-FlightRadarAPI
+# removed for now until pull request is accepted
+# => https://github.com/JeanExtreme002/FlightRadarAPI/pull/86
+#FlightRadarAPI
