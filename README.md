@@ -2,7 +2,7 @@
 
 [=> DEUTSCH](README_DE.md)
 
-The Flight Tracker is made for educational purposes and is one of the first evolutional tools to track and combine a number of online services on one spot.
+FlightTracker is made for educational purposes and is one of the first evolutional tools to track and combine a number of online services on one spot that is on my personal roadmap.
 
 It is made to visualize the flight traffic of your local environment and to get information of the flying objects around you. Additionally, optional current weather maps are displayed.
 
@@ -18,7 +18,7 @@ Currently included services are:
 
 For quick test, download the Windows binary as [FlightTracker.zip](https://pheles.de/FlightTracker.zip).
 
-The Flight Tracker is a Python application. To install to your computer, you just need to do:
+FlightTracker is a Python application. To install to your computer, you just need to do:
 
 ```
 git clone https://github.com/DaPheles/FlightTracker.git <install_path>

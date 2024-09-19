@@ -1,6 +1,6 @@
 # FlightTracker
 
-Flight Tracker wurde für Bildungszwecke entwickelt und ist eines der ersten evolutionären Tools, das eine Reihe von Online-Diensten an einem Ort verfolgt und kombiniert.
+FlightTracker wurde für Bildungszwecke entwickelt und ist eines der ersten evolutionären Tools auf meiner Roadmap, das eine Reihe von Online-Diensten an einem Ort verfolgt und kombiniert.
 
 Das Tool wurde entwickelt, um den Flugverkehr in der Umgebung zu visualisieren und Informationen über die Flugobjekte zu erhalten. Zusätzlich werden optionale aktuelle Wetterkarten angezeigt.
 
@@ -15,7 +15,7 @@ Derzeit enthaltene Dienste sind:
 
 Laden Sie zum schnellen Test die Windows-Binärdatei als [FlightTracker.zip](https://pheles.de/FlightTracker.zip) herunter.
 
-Der Flight Tracker ist eine Python-Anwendung. Alle aktuellen Python3-Versionen sollten problemlos laufen. Um ihn auf Ihrem Computer zu installieren, müssen Sie nur Folgendes tun:
+FlightTracker ist eine Python-Anwendung. Alle aktuellen Python3-Versionen sollten problemlos laufen. Um ihn auf Ihrem Computer zu installieren, müssen Sie nur Folgendes tun:
 
 ```
 git clone https://github.com/DaPheles/FlightTracker.git <install_path>
