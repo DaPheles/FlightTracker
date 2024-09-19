@@ -16,6 +16,8 @@ Currently included services are:
 
 ## Installation
 
+For quick test, download the Windows binary as [FlightTracker.zip](https://pheles.de/FlightTracker.zip).
+
 The Flight Tracker is a Python application. To install to your computer, you just need to do:
 
 ```

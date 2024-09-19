@@ -13,6 +13,8 @@ Derzeit enthaltene Dienste sind:
 
 ## Installation
 
+Laden Sie zum schnellen Test die Windows-Binärdatei als [FlightTracker.zip](https://pheles.de/FlightTracker.zip) herunter.
+
 Der Flight Tracker ist eine Python-Anwendung. Alle aktuellen Python3-Versionen sollten problemlos laufen. Um ihn auf Ihrem Computer zu installieren, müssen Sie nur Folgendes tun:
 
 ```
