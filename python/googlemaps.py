@@ -11,6 +11,7 @@ class GoogleMapsAPI(object):
         self.cachePath = os.path.join("cache", "tiles")
         self.localeLang = 'en'
         self.localeCountry = 'GB'
+        self.server = 0
 
     def setLocale(self, lang, country):
         self.localeLang = lang
@@ -39,8 +40,8 @@ class GoogleMapsAPI(object):
                     "accept-language": f"{self.localeLang}-{self.localeCountry};q=0.7,en;q=0.3",
                     "cache-control": "no-cache",
                     "connection": "keep-alive",
-                    "host": "khms0.googleapis.com",
-                    "alt-used": "khms0.googleapis.com",
+                    "host": f"khms{self.server}.googleapis.com",
+                    "alt-used": f"khms{self.server}.googleapis.com",
                     "sec-fetch-dest": "image",
                     "sec-fetch-mode": "no-cors",
                     "sec-fetch-site": "cross-site",
@@ -48,7 +49,8 @@ class GoogleMapsAPI(object):
                     "upgrade-insecure-requests": "1"
                 }
                 v = 988     # API version, may be incremented from time to time
-                url = f"https://khms0.googleapis.com/kh?v={v}&hl={self.localeLang}&x={x}&y={y}&z={z}"
+                url = f"https://khms{self.server}.googleapis.com/kh?v={v}&hl={self.localeLang}&x={x}&y={y}&z={z}"
+                self.server = 1 - self.server   # toggle 0-1-0-1
             elif style == "terrain":
                 url = f"https://maps.google.com/maps/vt?pb=!1m5!1m4!1i{z}!2i{x}!3i{y}!4i{tileSize}!2m3!1e4!2st!3i639!2m3!1e0!2sr!3i639377937!3m17!2s{self.localeLang}!3s{self.localeCountry}!5e18!12m4!1e8!2m2!1sset!2sTerrain!12m3!1e37!2m1!1ssmartmaps!12m4!1e26!2m2!1sstyles!2zcy50OjMzfHMuZTpsfHAudjpvZmY!4e0!23i1379903"
             else:
@@ -66,6 +68,7 @@ class GoogleMapsAPI(object):
                 img = Image.open(filename, formats=["jpeg","png"]).convert("RGBA")
             else:
                 if debug: print(f"Error downloading '{style}' tile: Status={req.status_code} ({url})")
+                print(f"Error downloading '{style}' tile: Status={req.status_code} ({url})")
                 # image data not successfully downloaded, use pink image by default
                 img = Image.new(mode="RGBA", size=(tileSize, tileSize), color="pink")
         else:
