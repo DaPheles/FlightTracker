@@ -1,12 +1,12 @@
 '''
-    helper class to handle Google Maps tiles
+    handle map tiles
 '''
 
 import os, time
 from PIL import Image, ImageTk
-import requests
 from coords import *
 from wettercom import WetterComAPI
+from googlemaps import GoogleMapsAPI
 import numpy as np
 
 CLOUDS_ALPHA = 0.6
@@ -22,7 +22,6 @@ class Tiles(object):
         self.tiles = dict()
         self.zoom_ = zoom
         self.centerview = centerview
-        self.cachePath = os.path.join("cache", "tiles")
 
         self.homeX_,self.homeY_ = latlngToPixel(home, zoom)
         self.center_ = None
@@ -36,15 +35,14 @@ class Tiles(object):
 
         # bind Wetter.com API for optional rain/cloud overlays
         self.wc = WetterComAPI()
+        self.gm = GoogleMapsAPI()
 
-        # set HOME focus
-        sx = tileNum[0]*tileSize/2
-        sy = tileNum[1]*tileSize/2
-        #self.update(self.homeX_, self.homeY_, zoom)
+        self.focus_ = None
         if centerview:
+            # set HOME focus
+            sx = tileNum[0]*tileSize/2
+            sy = tileNum[1]*tileSize/2
             self.focus_ = self.C.create_oval([sx-5,sy-5,sx+5,sy+5], fill='#FFAA66', tags='home', width=2)
-        else:
-            self.focus_ = None
 
     @property
     def tileSize(self):
@@ -85,6 +83,8 @@ class Tiles(object):
         self.localeCountry = country
         if self.wc:
             self.wc.setLocale(lang, country)
+        if self.gm:
+            self.gm.setLocale(lang, country)
     
     def getTile(self, x, y, z, ts=None):
         '''
@@ -92,72 +92,14 @@ class Tiles(object):
 
         @param x the x value of the world coordinate
         @param y the y value of the world coordinate
+        @param z the zoom level of the world coordinate
 
         @return the binary image data
         '''
-        def getTileImage(path, x, y, z, tileSize, style, debug=False):
-            dirname = os.path.join(path, style, str(z))
 
-            # check for subfolders and create them if needed
-            if not os.path.exists(dirname):
-                os.makedirs(dirname)
-
-            filename = os.path.join(dirname, f"{x},{y}.dat")
-            if not os.path.exists(filename):
-                headers = {
-                    "accept": "image/avif,image/webp,*/*",
-                    "accept-encoding": "gzip, br",
-                    "accept-language": f"{self.localeLang}-{self.localeCountry};q=0.7,en;q=0.3",
-                    "host": "maps.google.com",
-                    "user-agent": "Mozilla/5.0 (Windows NT 6.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36"
-                }
-
-                # get missing tile from google maps
-                if style == "satellite":
-                    v = 946     # API version, may be incremented sometime
-                    url = f"https://khms0.googleapis.com/kh?v={v}&hl={self.localeLang}&x={x}&y={y}&z={z}"
-                    headers = {
-                        "accept": "image/avif,image/webp,*/*",
-                        "accept-encoding": "gzip, br",
-                        "accept-language": f"{self.localeLang}-{self.localeCountry};q=0.7,en;q=0.3",
-                        "cache-control": "no-cache",
-                        "connection": "keep-alive",
-                        "host": "khms0.googleapis.com",
-                        "alt-used": "khms0.googleapis.com",
-                        "sec-fetch-dest": "image",
-                        "sec-fetch-mode": "no-cors",
-                        "sec-fetch-site": "cross-site",
-                        "pragma": "no-cache",
-                        "upgrade-insecure-requests": "1"
-                    }
-                elif style == "terrain":
-                    url = f"https://maps.google.com/maps/vt?pb=!1m5!1m4!1i{z}!2i{x}!3i{y}!4i{tileSize}!2m3!1e4!2st!3i639!2m3!1e0!2sr!3i639377937!3m17!2s{self.localeLang}!3s{self.localeCountry}!5e18!12m4!1e8!2m2!1sset!2sTerrain!12m3!1e37!2m1!1ssmartmaps!12m4!1e26!2m2!1sstyles!2zcy50OjMzfHMuZTpsfHAudjpvZmY!4e0!23i1379903"
-                else:
-                    url = f"https://maps.google.com/maps/vt?pb=!1m5!1m4!1i{z}!2i{x}!3i{y}!4i{tileSize}!2m3!1e0!2sm!3i643381729!3m17!2s{self.localeLang}!3s{self.localeCountry}!5e18!12m4!1e68!2m2!1sset!2sRoadmapSatellite!12m3!1e37!2m1!1ssmartmaps!12m4!1e26!2m2!1sstyles!2zcy50OjMzfHMuZTpsfHAudjpvZmY!4e0!23i1379903"
-
-                # try to download image
-                req = requests.get(url, allow_redirects=True, headers=headers)
-                if req.status_code == 200:
-                    if debug: print(f"Downloading success of '{style}' tile ({url})!")
-                    # on success: save image to file system and load as RGBA image
-                    data = req.content
-                    with open(filename, "wb") as f:
-                        f.write(data)
-                    img = Image.open(filename).convert("RGBA")
-                else:
-                    if debug: print(f"Error downloading '{style}' tile: Status={req.status_code} ({url})")
-                    # image data not successfully downloaded, use pink image by default
-                    img = Image.new(mode="RGBA", size=(
-                        tileSize, tileSize), color="pink")
-            else:
-                # if filename exists: load as RGBA image
-                img = Image.open(filename, formats=["jpeg","png"]).convert("RGBA")
-            return img
-
-        img = getTileImage(self.cachePath, x, y, z, self.tileSize_, self.style['basemap'], debug=DEBUG)
+        img = self.gm.getTileImage(x, y, z, self.tileSize_, self.style['basemap'], debug=DEBUG)
         if self.style['roadmap']:
-            img_overlay = getTileImage(
-                self.cachePath, x, y, z, self.tileSize_, 'roadmap')
+            img_overlay = self.gm.getTileImage(x, y, z, self.tileSize_, 'roadmap', debug=DEBUG)
             img.paste(img_overlay, (0, 0), img_overlay)
 
         # brightness adjust
@@ -165,6 +107,7 @@ class Tiles(object):
         img_[:,:,:3] = (img_[:,:,:3]*self.style['brightness']).astype(np.uint8)
         img = Image.fromarray(img_)
         
+        # render cloud radar overlay with zoom levels smaller or equal 13 only
         if self.enableClouds and z <= 13:
             if DEBUG: print(f"Tiles::getTile(): Trying to get cloud image for x={x}, y={y}, z={z}")
             img_overlay = self.wc.getCloudImage(x, y, z)
@@ -177,6 +120,7 @@ class Tiles(object):
                 img.paste(img_overlay, (0, 0), img_overlay)
                 img_ = np.array(img)
 
+        # render rain radar overlay with zoom levels smaller or equal 13 only
         if self.enableRadar and z <= 13:
             if ts == None:
                 ts_ = int(time.time())
@@ -278,6 +222,11 @@ class Tiles(object):
                     self.C.moveto(self.tiles[f'{y}{x}'], x_, y_)
 
     def getPlanePos(self):
+        '''
+        Get the plane position as window coordinate
+
+        @return the binary image data
+        '''
         if self.centerview:
             sx = self.tileSize_*self.tileNum_[0]/2
             sy = self.tileSize_*self.tileNum_[1]/2
