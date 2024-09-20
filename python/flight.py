@@ -196,8 +196,9 @@ class Flight(object):
         try:
           trail_details = details['trail']
         except Exception as e: 
-          print(f"Error: Trail history compilation failed!\n{e}")
-        finally:
+          # No trail available
+          pass
+        else:
           self.past_loc = dict()
           self.past_alt = dict()
           trail_details = sorted(trail_details, key=lambda x: x['ts'])
@@ -213,7 +214,7 @@ class Flight(object):
                  sy_ >= -self.ySize/8 and sy_ < 9*self.ySize/8:
                 self.past_loc[ts_] = (sx_, sy_)
                 self.past_alt[ts_] = self.ft2km(trail['alt'])
-          self.history_loaded = True
+        self.history_loaded = True
           
       # TODO: remove actual position when trail details are updated, this position may 
       # likely not be part of the trail history, for now, no updates are executed
