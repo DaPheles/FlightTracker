@@ -79,7 +79,6 @@ class GoogleMapsAPI(object):
             req = requests.get(url, allow_redirects=True, headers=headers)
             if req.status_code == 200:
                 if debug: print(f"Downloading success of '{style}' tile ({url})!")
-                print(f"Downloading success of '{style}' tile ({url})!")
                 # on success: save image to file system and load as RGBA image
                 data = req.content
                 with open(filename, "wb") as f:
@@ -87,7 +86,6 @@ class GoogleMapsAPI(object):
                 img = Image.open(filename, formats=["jpeg","png"]).convert("RGBA")
             else:
                 if debug: print(f"Error downloading '{style}' tile: Status={req.status_code} ({url})")
-                print(f"Error downloading '{style}' tile: Status={req.status_code} ({url})")
                 # image data not successfully downloaded, use pink image by default
                 img = Image.new(mode="RGBA", size=(tileSize, tileSize), color="pink")
         else:
