@@ -5,6 +5,7 @@
 from FlightRadar24_patch.api import FlightRadar24API
 from hover import CanvasToolTip
 from coords import *
+from helper import ft2km, kts2kmh, hsv2rgb
 import tkinter as tk
 from threading import Thread
 from followFlight import FollowFlight
@@ -71,58 +72,7 @@ class Flight(object):
 
   def runFollowFlight(self, id):
     # create toplevel and start followFlight app with given flight id
-    #top_ = tk.Toplevel()
     FollowFlight(self.tk, id, self.fr_api)
-
-  def ft2km(self, ft):
-    return ft/3280.84
-  
-  def kts2kmh(self, kts):
-    return kts*1.852
-  
-  def hsv2rgb(self, hsv):
-      h,s,v = hsv
-      
-      h8 = h*8
-      hi = int(h8)
-      f  = h8 - hi
-      
-  #    p  = v * (1.0 - s)
-  #    q  = v * (1.0 - s * f)
-  #    t  = v * (1.0 - s * (1.0 - f))
-      vs  = v * s
-      vsf = vs * f
-      p   = v - vs
-      q   = v - vsf
-      t   = v - vs + vsf
-      
-      if (hi == 0):
-          r = v
-          g = t
-          b = p
-      elif (hi == 1):
-          r = q
-          g = v
-          b = p
-      elif (hi == 2):
-          r = p
-          g = v
-          b = t
-      elif (hi == 3):
-          r = p
-          g = q
-          b = v
-      elif (hi == 4):
-          r = t
-          g = p
-          b = v
-      else:
-          r = v
-          g = p
-          b = q
-      
-      #return np.array([r,g,b])
-      return f"#{int(255*r):02X}{int(255*g):02X}{int(255*b):02X}"
 
   def update_about_content(self, fl, details):
     try:
@@ -168,8 +118,8 @@ class Flight(object):
     sy += self.off_y
 
     # unit conversions
-    alt_km = self.ft2km(alt)
-    gsp_kmh = self.kts2kmh(gsp)
+    alt_km = ft2km(alt)
+    gsp_kmh = kts2kmh(gsp)
 
     # delete old stuff
     self.cleanup()
@@ -213,7 +163,7 @@ class Flight(object):
               if sx_ >= -self.xSize/8 and sx_ < 9*self.xSize/8 and \
                  sy_ >= -self.ySize/8 and sy_ < 9*self.ySize/8:
                 self.past_loc[ts_] = (sx_, sy_)
-                self.past_alt[ts_] = self.ft2km(trail['alt'])
+                self.past_alt[ts_] = ft2km(trail['alt'])
         self.history_loaded = True
           
       # TODO: remove actual position when trail details are updated, this position may 
@@ -226,9 +176,10 @@ class Flight(object):
         sx, sy = sx_, sy_
 
       # draw flight icon
-      isize = 25 if alt_km < 3 else 30 if alt_km < 9 else 35
-      icolor = 'R' if ori == "N/A" or dst == "N/A" else 'B' if alt_km > 12.0 else 'Y'
-      self.icon = self.sprites.getIcon(fl, isize, icolor)
+      #isize = 25 if alt_km < 3 else 30 if alt_km < 9 else 35
+      isize = 25 + alt_km*2
+      #icolor = 'R' if ori == "N/A" or dst == "N/A" else 'B' if alt_km > 12.0 else 'Y'
+      self.icon = self.sprites.getIcon(fl, isize, alt_km, s=0.75, v=1.25)
 
       # draw description / details
       if alt_km > 0:
@@ -310,7 +261,7 @@ class Flight(object):
         h = math.fmod(self.past_alt[ts_]/12 + 0.25, 0.75)
         v = 0.5*(self.maxFlightAge-(now-ts_))/self.maxFlightAge + 0.4
         s = v/2
-        col = self.hsv2rgb((h,s,v))
+        col = hsv2rgb((h,s,v))
         pos1 = self.past_loc[ts_]
         pos2 = self.past_loc[timestamps[i+1]]
         if pos1[0] >= -self.xSize/8 and pos1[0] < 9*self.xSize/8 and \

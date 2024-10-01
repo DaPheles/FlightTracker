@@ -1,6 +1,8 @@
 jsons
 requests
 pillow
+opencv-python
 # removed for now until pull request is accepted
 # => https://github.com/JeanExtreme002/FlightRadarAPI/pull/86
 #FlightRadarAPI
+pyephem

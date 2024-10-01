@@ -9,9 +9,11 @@ from sprites import Sprites
 from tiles import Tiles
 from trails import Trails
 from coords import *
-from helper import Dict2Class
+from helper import Dict2Class, ft2km, kts2kmh
+from iss import IssAPI
+from skyaware import SkyawareAPI
 import tkinter as tk
-import time, json
+import time, json, os, sys
 
 class FollowFlight:
   def __init__(self, tk_root, flight, fr_api=None, saveHistory=False, destroyEvent=None) -> None:
@@ -21,6 +23,8 @@ class FollowFlight:
     self.top.resizable(False,False)
     if destroyEvent is not None:
       self.top.protocol("WM_DELETE_WINDOW", destroyEvent)
+    else:
+      self.top.protocol("WM_DELETE_WINDOW", self._destroy)
 
     # config defaults
     self.home = (52.5162767,13.3777761)
@@ -38,23 +42,45 @@ class FollowFlight:
     self.enableClouds = False
     self.loadConfig()
 
-    self.f = None
-    self.flight = flight
-    self.fr_api = fr_api if fr_api else FlightRadar24API()
-    self.saveHistory = saveHistory
+    # load sprites
+    self.sprites = Sprites()
+    self.iconImage = None
+    self.icon = None
 
-    self.online = False
+    self.f = None
+    self.flight = None
+    self.flight_icao = None
+    self.fr_api = None
+    self.sa_api = None
+    self.iss_api = None
+    self.iss_mode = False
+    if flight == 'iss':
+      self.iss_api = IssAPI()
+      self.saveHistory = False
+      self.iss_mode = True
+      self.timestep = 0.25        ;# in seconds
+      self.online = True
+      self.top.title("Follow Flight - ISS  **LIVE**")
+      f = Dict2Class(dict(aircraft_code='ISS', heading=45))
+      try:
+        self.iconImage = self.sprites.getIcon(f, 80, alt=7.25, s=0.5, v=2.0)
+        self.top.wm_iconphoto(False, self.iconImage)
+      except:
+        pass
+    else:
+      self.flight = flight
+      self.fr_api = fr_api if fr_api else FlightRadar24API()
+      self.saveHistory = saveHistory
+#      self.timestep = 3.2         ;# in seconds
+      self.timestep = 2.0         ;# in seconds
+      self.timestep_lost = 15.0   ;# in seconds
+      self.online = False
+      self.sa_api = SkyawareAPI()
+
     self.now = time.time()
-    self.timestep = 3.2   ;# in seconds
-    self.timestep_lost = 15.0   ;# in seconds
     self.past_loc = self.home
     self.past_details = None
     self.lost_count = 0
-    
-    # load sprites
-    self.sprites = Sprites([80])
-    self.iconImage = None
-    self.icon = None
 
     # map stuff
     self.latitude = -1
@@ -74,6 +100,10 @@ class FollowFlight:
 
     # trails
     self.trails = Trails(self.fr_api, flight, self.tiles, self.maxtrail, self.centerview)
+    if self.iss_mode:
+      self.trails.updateTS = 0
+      self.trails.timegap = 8
+
 
     # prepare initial trail trace
     self.trailPoly = self.C.create_line([0,0,0,0], fill="#AA8866", width=5, smooth=1)
@@ -82,9 +112,22 @@ class FollowFlight:
     # start periodic update cycles
     self.top.bind('<KeyPress>', self.onKey)
     self.C.after(0,self._update)
+    self.is_alive = True
+
+  def _destroy(self):
+    # try to close both: toplevel window and Followflight class to prevent more updates in undefined states
+    self.is_alive = False
+    try:
+      self.top.destroy()
+    except:
+      pass
 
   def loadConfig(self):
     ''' Config loader '''
+    if not os.path.exists('config.ini'):
+      print("No configuration file 'config.ini' found!")
+      sys.exit()
+
     config = ConfigParser()
     config.read('config.ini')
     app = 'FollowFlight'
@@ -141,16 +184,19 @@ class FollowFlight:
 
   def visualize(self, f, details={}):
     alt = f.altitude
-    ts  = f.time
+    #ts  = f.time
     lat = f.latitude
     lng = f.longitude
     spd = f.ground_speed
-    hd  = f.heading
+    #hd  = f.heading
+    icao = f.icao_24bit
     # conversions
-    ts_ = time.strftime("%H:%M:%S", time.localtime(ts))
-    alt_km = alt/3281
-    spd_kmh = spd*1.852
+    alt_km = ft2km(alt)
+    spd_kmh = kts2kmh(spd)
 
+    #print("=== Status ===")
+    #for k,v in zip(f.__dict__.keys(), f.__dict__.values()):
+    #  print(k,v)
 
     # auto-set zoom level according to flight altitude and speed
     self.zoom = max(8, int(16/(alt_km+2)+8))
@@ -158,12 +204,10 @@ class FollowFlight:
 
     x,y = worldToPixel(lngToXWorld(lng), latToYWorld(lat), self.zoom)
 
-    #line = f"{ts_}\t{alt}\t{lng:.4f}\t{lat:.4f}\t{spd}\t{hd}"
     tileLoc = f"Zoom: {self.zoom}"
     if 'trail' in details:
       tileLoc += f", History: {len(details['trail'])}"
 
-    #print(line, "->", tileLoc)
     self.past_loc = (lat,lng)
 
     # update map tiles, returns new projection parameters onto them
@@ -184,8 +228,8 @@ class FollowFlight:
     if self.icon:
       self.C.delete(self.icon)
     try:
-      self.iconImage = self.sprites.getIcon(f, 80, None)
-      self.icon = self.C.create_image((sx+3, sy+3), image=self.iconImage)
+      self.iconImage = self.sprites.getIcon(f, 80, 7.25)
+      self.icon = self.C.create_image((sx, sy), image=self.iconImage)
       self.C.lift(self.icon)
       if self.tiles.focus:
         self.C.lower(self.tiles.focus)
@@ -273,6 +317,14 @@ class FollowFlight:
         lat = f.latitude
         lng = f.longitude
         ts  = f.time
+        self.flight_icao = f.icao_24bit
+
+        # update skyaware if available
+        if self.sa_api and self.flight_icao and self.past_details is not None:
+          sa_data = self.update_sa(self.flight_icao)
+          if sa_data is not None and sa_data[0] > ts + 0.11:
+            ts, lat, lng = sa_data
+            #print("SA",self.flight_icao,lat,lng,sa_data[0])
 
         details = self.fr_api.get_flight_details(f)
         f.set_flight_details(details)
@@ -301,41 +353,91 @@ class FollowFlight:
 
     return ok
   
+  def visualize_iss(self, ts, lat, lng):
+    self.zoom = 6 # default ISS zoom
+
+    x,y = worldToPixel(lngToXWorld(lng), latToYWorld(lat), self.zoom)
+
+    self.past_loc = (lat,lng)
+
+    self.latitude = x
+    self.longitude = y
+    self.tiles.update(x, y, self.zoom)
+    trail = self.trails.update()
+
+    if len(trail) >= 4:
+      self.C.coords(self.trailPoly, trail)
+      self.C.lift(self.trailPoly)
+    
+    # update position marker
+    sx,sy = self.tiles.getPlanePos()
+
+    # handle plane icon
+    if self.icon:
+      self.C.delete(self.icon)
+    
+    # try to get sprite
+    f = Dict2Class(dict(aircraft_code='ISS', heading=45))
+    if self.iconImage is None:
+      self.C.moveto(self.tiles.focus, sx-5, sy-5)
+      if self.tiles.focus:
+        self.C.lift(self.tiles.focus)
+    else:
+      self.icon = self.C.create_image((sx, sy), image=self.iconImage)
+      self.C.lift(self.icon)
+      if self.tiles.focus:
+        self.C.lower(self.tiles.focus)
+
   # main update loop
   def _update(self):
-    self.top.update()
-    
-    ok = False
-    try:
-      ok = self.getLatestLoc()
-    except Exception as e: # work on python 3.x
-      print('Error:', str(e))
+    if self.iss_mode:
+      response = self.iss_api.get_position()
 
-    details = self.past_details
-    if self.online and not ok and self.saveHistory:
-      self.saveFlightDetails(details)
-    elif not self.online and self.past_details is None:
-      print(f'Flight {self.flight} is offline!')
-      f = Dict2Class(dict(id=self.flight))
-      details = self.fr_api.get_flight_details(f)
-      #self.visualize(f, details)
-      if self.saveHistory:
-        self.saveFlightDetails(details)
-      #sys.exit()
+      ts = int(response[0])
+      lat = float(response[1])
+      lng = float(response[2])
 
-    self.online = ok
+      self.trails.new((ts,lat,lng))
+      self.visualize_iss(ts, lat, lng)
 
-    if not ok:
+    else:
+
+      ok = False
       try:
-        callsign = details['identification']['callsign']
+        ok = self.getLatestLoc()
+#      except Exception as e: # work on python 3.x
+#        print('Error:', str(e))
       except:
-        callsign = "N/A"
-      title = f"Follow Flight - {callsign} - OFFLINE"
-      self.top.title(title)
-      self.lost_count += 1
-      if self.lost_count >= 10:
-        print(f"Flight '{callsign}' ({self.flight}) turned offline. Bye bye!")
-        return
+        pass
+
+      details = self.past_details
+      if self.online and not ok and self.saveHistory:
+        self.saveFlightDetails(details)
+      elif not self.online and self.past_details is None:
+        print(f'Flight {self.flight} is offline!')
+        f = Dict2Class(dict(id=self.flight))
+        details = self.fr_api.get_flight_details(f)
+        #self.visualize(f, details)
+        if self.saveHistory:
+          self.saveFlightDetails(details)
+        #sys.exit()
+
+      self.online = ok
+
+      if not ok:
+        try:
+          callsign = details['identification']['callsign']
+        except:
+          callsign = "N/A"
+        title = f"Follow Flight - {callsign} - OFFLINE"
+        try:
+          self.top.title(title)
+        except:
+          pass
+        self.lost_count += 1
+        if self.lost_count >= 10:
+          print(f"Flight '{callsign}' ({self.flight}) turned offline. Bye bye!")
+          return
 
     # update every 2 second
     timestep = self.timestep if self.online else self.timestep_lost
@@ -349,4 +451,54 @@ class FollowFlight:
       # use timestep as increment to precicely synchronize to the continuous timeline
       self.now += timestep
 
-    self.C.after(delta,self._update)
+    # commit suicide if no longer needed
+    if self.is_alive:
+      self.top.update()
+      self.C.after(delta,self._update)
+    else:
+      self._destroy()
+      # TODO: who's gonna clean up after this??
+
+  def update_sa(self, flight_icao):
+    self.sa_api.update()
+    f = self.sa_api.get_flights(flight_icao)
+    if f is None:
+      return
+    
+    #print(f)
+    if 'lat' in f and 'lng' in f:
+      #x,y = latlngToPixel((f['lat'], f['lng']), self.zoom)
+      #print(" =>", x,y, x-self.latitude, y-self.longitude, self.tiles.offset)
+      print(f)
+      return f['time'], f['lat'], f['lng']
+    
+    return None
+
+    # update map tiles, returns new projection parameters onto them
+    #self.center, offx, offy = self.tiles.update(x, y, self.zoom)
+    self.latitude = x
+    self.longitude = y
+    self.tiles.update(x, y, self.zoom)
+    trail = self.trails.update(details)
+
+    if len(trail) >= 4:
+      self.C.coords(self.trailPoly, trail)
+      self.C.lift(self.trailPoly)
+    
+    # update position marker
+    sx,sy = self.tiles.getPlanePos()
+
+    # handle plane icon
+    if self.icon:
+      self.C.delete(self.icon)
+    try:
+      self.iconImage = self.sprites.getIcon(f, 80, None)
+      self.icon = self.C.create_image((sx+3, sy+3), image=self.iconImage)
+      self.C.lift(self.icon)
+      if self.tiles.focus:
+        self.C.lower(self.tiles.focus)
+    except:
+      self.C.moveto(self.tiles.focus, sx-5, sy-5)
+      if self.tiles.focus:
+        self.C.lift(self.tiles.focus)
+      #pass

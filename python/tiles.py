@@ -96,7 +96,8 @@ class Tiles(object):
 
         @return the binary image data
         '''
-
+        x = x%(2**z)
+        y = y%(2**z)
         img = self.gm.getTileImage(x, y, z, self.tileSize_, self.style['basemap'], debug=DEBUG)
         if self.style['roadmap']:
             img_overlay = self.gm.getTileImage(x, y, z, self.tileSize_, 'roadmap', debug=DEBUG)

@@ -44,9 +44,9 @@ class FlightTracker(tk.Tk):
     self.bounds = self.getBounds()
     
     # load sprites
-    self.sprites = Sprites([25,30,35])  # available sizes: 25,30,35,80
+    self.sprites = Sprites()
     winIconCfg = Dict2Class(dict(aircraft_code="A380", heading=45))
-    self.winIcon = self.sprites.getIcon(winIconCfg, 35, "R")
+    self.winIcon = self.sprites.getIcon(winIconCfg, 80, 6.0)
     self.wm_iconphoto(False, self.winIcon)
 
     # map stuff
@@ -89,8 +89,8 @@ class FlightTracker(tk.Tk):
     self.bind('<KeyPress>', self.onKey)
     self.update()
     self.C.after(0,self._update)
-    #self.fullscreen = False
-    #self.bind('<F12>', self.toggleFullscreen)
+    self.fullscreen = False
+    self.bind('<F12>', self.toggleFullscreen)
     #self.geometrySave = None
 
   def getBounds(self):
@@ -119,6 +119,7 @@ class FlightTracker(tk.Tk):
         self.C.configure(width=self.xSize, height=self.ySize)
         self.wm_geometry(self.geometrySave)
     self.update()
+    print(self.xSize, self.ySize)
               
   def loadConfig(self):
     ''' Config loader '''
@@ -186,13 +187,6 @@ class FlightTracker(tk.Tk):
       self.homeRadarIndex = self.tiles.homeRadarIndex
       self.tileTs = tilets_
 
-      #now_str = time.strftime("%Y-%m-%d-%H:%M", time.gmtime(tilets_))
-      #print(f"{now_str}: Number of tracked flights: {len(self.flights)}")
-      #smpls = 0
-      #for flid in self.flights:
-      #  smpls += len(self.flights[flid].past_loc)
-      #print(f"{now_str}: Number of maintained samples: {smpls}")
-
     # get local flights in sight
     flights = self.getFlightsData()
 
@@ -236,23 +230,26 @@ class FlightTracker(tk.Tk):
           # lift all plane and detail objects
           self.flights[id].lift_plane()
 
-    # update every 2 second
-    delta = int((self.timestep-(time.time()-self.now))*1000)
-    if delta < 10:
+    # update window title
+    title = f"Flight Tracker - Tracked flights:{len(self.flights)}"
+    if self.tiles.enableRadar:
+       title += f" - Rain Index:{self.homeRadarIndex}"
+    if self.tiles.enableClouds:
+       title += " - C"
+    self.title(title)
+
+    # periodic updates, find remaining delta to configured timestep
+    delta_ms = int((self.timestep-(time.time()-self.now))*1000)
+    if delta_ms < 10:
       # use current timestamp if processing latency is larger than timestep
       self.now = time.time()
-      delta = 10
+      delta_ms = 10
     else:
       # use timestep as increment to precicely synchronize to the continuous timeline
       self.now += self.timestep
 
-    title = f"Flight Tracker - Tracked flights:{len(self.flights)}"
-    if self.tiles.enableRadar:
-       title += f" - Rain Index:{self.homeRadarIndex}"
-    self.title(title)
-
     self.update()
-    self.C.after(delta,self._update)
+    self.C.after(delta_ms, self._update)
 
 if __name__ == "__main__":
   # create Application

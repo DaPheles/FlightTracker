@@ -18,11 +18,13 @@ class Trails(object):
         self.maxTrail = maxTrail
         self.centerview = centerview
 
-        self.trail = self.getFlightHistory()
-        #self.trail = list()
+        self.trail = list()
+        if fr_api:
+            self.trail = self.getFlightHistory()
         self.trailHQ = len(self.trail)
         self.updateTS = -1
         self.updateTick = 0
+        self.timegap = 1
     
     def setUpdateTick(self, tick):
         self.updateTick = tick
@@ -70,8 +72,19 @@ class Trails(object):
 
         return trail
 
+    @property
+    def last_ts(self):
+        if len(self.trail) < 2:
+            return -1
+        else:
+            return self.trail[-2][0]
+
     def new(self, step):
-        self.trail.append(step)
+        if len(self.trail) > 1 and step[0] - self.last_ts < self.timegap:
+            self.trail[-1] = step
+        else:
+            self.trail.append(step)
+
         # forget the past
         if len(self.trail) > self.maxTrail:
           del self.trail[0]
@@ -79,20 +92,21 @@ class Trails(object):
 
     def update(self, details=dict()):
         # get full flight history on first update() call
-        if self.updateTS < 0:
-            #self.trail = self.fr_api.get_flight_details(self.flight)
-            try:
-                self.trail = self.getFlightHistory()
-            except:
-                return list()
-            self.trailHQ = len(self.trail)
-            self.updateTS = time.time()
-        elif len(details) == 0:
-            try:
-                details = self.fr_api.get_flight_details(self.f)
-            except:
-                # do nothing
-                return list()
+        if self.fr_api:
+            if self.updateTS < 0:
+                #self.trail = self.fr_api.get_flight_details(self.flight)
+                try:
+                    self.trail = self.getFlightHistory()
+                except:
+                    return list()
+                self.trailHQ = len(self.trail)
+                self.updateTS = time.time()
+            elif len(details) == 0:
+                try:
+                    details = self.fr_api.get_flight_details(self.f)
+                except:
+                    # do nothing
+                    return list()
 
         # trail optimisation: remove high frequency low quality locations and
         # replace then by history data with minimized frequency and high quality locations
@@ -129,7 +143,6 @@ class Trails(object):
         tileNum  = self.tiles.tileNum
         z = self.tiles.zoom
         for step in reversed(self.trail):
-            #tx, ty = worldToPixel(lngToXWorld(step[2]), latToYWorld(step[1]), z)
             tx, ty = latlngToPixel(step[1:3], z)
             tilex, tiley = tx//tileSize, ty//tileSize
             if abs(self.tiles.center[0]-tilex) > tileNum[0] or \
@@ -142,6 +155,7 @@ class Trails(object):
             else:
                 tx_ = tileSize * (tilex-self.tiles.center[0]+tileNum[0]//2) + (tx % tileSize)
                 ty_ = tileSize * (tiley-self.tiles.center[1]+tileNum[1]//2) + (ty % tileSize)
+            # TODO: fix dateline transition
             trail_ += [tx_, ty_]
         
         self.updateTS = int(time.time())
