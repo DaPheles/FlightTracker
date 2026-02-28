@@ -1,14 +1,17 @@
 #!/usr/bin/python
 
-from configparser import ConfigParser
-from FlightRadar24_patch.api import FlightRadar24API
 from sprites import Sprites
-from flight import Flight
+from flight import Flight, FlightFactory
 from tiles import Tiles
 from coords import *
 from helper import Dict2Class
+from logger import get_logger
+from config_manager import get_config
+from flight_service import get_flight_service
 import tkinter as tk
 import time
+
+logger = get_logger(__name__)
 
 class FlightTracker(tk.Tk):
   def __init__(self) -> None:
@@ -18,25 +21,31 @@ class FlightTracker(tk.Tk):
     self.title("Flight Tracker")
     self.resizable(False,False)
 
-    # config defaults
-    self.home = (52.5162767,13.3777761)
-    self.zoom = 11
-    self.mapGrid = (4,4)
-    self.mapTiles = dict(basemap="terrain", roadmap=False, brightness=0.4)
-    self.tileSize = 256       # must remain fixed by now
-    self.maxFlightAge = 900   # keep flight history in memory, in seconds
-    
-    ## config loader, overriding defaults where available
-    # Google Maps localization, english per default, can be adjusted through config.ini
-    self.localeLang = 'en'
-    self.localeCountry = 'GB'
-    self.enableRadar = False
-    self.enableClouds = False
-    self.loadConfig()
+    # Load configuration
+    config = get_config()
+    home_cfg = config.home
+    app_cfg = config.flight_tracker
 
-    # FlightRadar24 API
-    self.fr_api = FlightRadar24API()
-    self.fr_api.set_flight_tracker_config(vehicles=0)
+    # Apply configuration
+    self.home = home_cfg.location
+    self.zoom = home_cfg.zoom
+    self.timestep = home_cfg.timestep
+    self.localeLang = home_cfg.locale_lang
+    self.localeCountry = home_cfg.locale_country
+
+    self.mapGrid = app_cfg.grid
+    self.mapTiles = dict(
+        basemap=app_cfg.map_tiles.basemap,
+        roadmap=app_cfg.map_tiles.roadmap,
+        brightness=app_cfg.map_tiles.brightness
+    )
+    self.tileSize = 256  # fixed tile size
+    self.maxFlightAge = app_cfg.max_flight_age
+    self.enableRadar = app_cfg.enable_rain_radar
+    self.enableClouds = app_cfg.enable_cloud_radar
+
+    # Flight data service (handles API access)
+    self._flight_service = get_flight_service()
 
     # compute pixel position of home location
     self.homeX, self.homeY = latlngToPixel(self.home, self.zoom)
@@ -48,6 +57,7 @@ class FlightTracker(tk.Tk):
     winIconCfg = Dict2Class(dict(aircraft_code="A380", heading=45))
     self.winIcon = self.sprites.getIcon(winIconCfg, 80, 6.0)
     self.wm_iconphoto(False, self.winIcon)
+    self.iconphoto(False, self.winIcon)
 
     # map stuff
     self.xSize = self.tileSize*self.mapGrid[0]
@@ -63,9 +73,13 @@ class FlightTracker(tk.Tk):
     self.tileTs = tilets_-(tilets_%300)  # 5 min granularity for radar update period
     self.homeRadarIndex = self.tiles.homeRadarIndex
 
-    # trails
+    # trails and flights
     self.trails = dict()
     self.flights = dict()
+
+    # Flight factory for creating flight objects
+    self._flight_factory = FlightFactory(self.tk, self._flight_service.api, self.C, self.sprites)
+    self._flight_offsets = (self.xSize//2 - self.homeX, self.ySize//2 - self.homeY)
 
     # draw radar
     radarColor = '#222222'
@@ -119,48 +133,8 @@ class FlightTracker(tk.Tk):
         self.C.configure(width=self.xSize, height=self.ySize)
         self.wm_geometry(self.geometrySave)
     self.update()
-    print(self.xSize, self.ySize)
+    logger.debug(f"Window size: {self.xSize}x{self.ySize}")
               
-  def loadConfig(self):
-    ''' Config loader '''
-    config = ConfigParser()
-    config.read('config.ini')
-    app = 'FlightTracker'
-
-    # get HOME location
-    if 'HOME' in config:
-      if 'latitude' in config['HOME'] and 'longitude' in config['HOME']:
-        lat = float(config['HOME']['latitude'])
-        lng = float(config['HOME']['longitude'])
-        self.home = (lat,lng)
-      else:
-        print(f'loadConfig(): HOME config incomplete!')
-      if 'zoom' in config['HOME']:
-        self.zoom = int(config['HOME']['zoom'])
-      if 'timestep' in config['HOME']:
-        self.timestep = float(config['HOME']['timestep'])
-      if 'localeLang' in config['HOME']:
-        self.localeLang = config['HOME']['localeLang']
-      if 'localeCountry' in config['HOME']:
-        self.localeCountry = config['HOME']['localeCountry']
-
-    if app in config:
-      if 'grid' in config[app]:
-        values = config[app]['grid'].split(',')
-        self.mapGrid = (int(values[0]),int(values[1]))
-      if 'basemap' in config[app]:
-        self.mapTiles['basemap'] = config[app]['basemap']
-      if 'roadmap' in config[app]:
-        self.mapTiles['roadmap'] = config.getboolean(app,'roadmap')
-      if 'brightness' in config[app]:
-        self.mapTiles['brightness'] = config.getfloat(app,'brightness')
-      if 'maxFlightAge' in config[app]:
-        self.maxFlightAge = config.getint(app,'maxFlightAge')
-      if 'enableRainRadar' in config[app]:
-        self.enableRadar = config.getboolean(app,'enableRainRadar')
-      if 'enableCloudRadar' in config[app]:
-        self.enableClouds = config.getboolean(app,'enableCloudRadar')
-
   def onKey(self, event):
     if event.char == 'c':
       self.tiles.toggleClouds()
@@ -171,10 +145,8 @@ class FlightTracker(tk.Tk):
       self.homeRadarIndex = self.tiles.homeRadarIndex
 
   def getFlightsData(self):
-      try:
-          return self.fr_api.get_flights(bounds=self.bounds)
-      except:
-          return list()
+      """Get flights within the configured bounds using the flight service."""
+      return self._flight_service.get_flights_in_bounds(self.bounds)
 
   def _update(self):
 
@@ -195,12 +167,12 @@ class FlightTracker(tk.Tk):
     for fl in flights:
       id = fl.id
       if id not in self.flights:
-        # create flight object
-        self.flights[id] = Flight(self.tk, self.fr_api, self.C, maxFlightAge=self.maxFlightAge, centerview=True)
-        # define drawing offset
-        self.flights[id].init_offsets(self.xSize//2 - self.homeX, self.ySize//2 - self.homeY)
-        self.flights[id].init_sprites(self.sprites)
-        self.flights[id].init_zoom(self.zoom)
+        # create flight object using factory
+        self.flights[id] = self._flight_factory.create(
+            offsets=self._flight_offsets,
+            zoom=self.zoom,
+            max_flight_age=self.maxFlightAge
+        )
 
       # update object with new details
       self.flights[id].update(fl, now)

@@ -3,8 +3,12 @@
 '''
 
 import requests
-import time, os, json
+import time, json
+from pathlib import Path
 from PIL import Image
+from logger import get_logger
+
+logger = get_logger(__name__)
 
 class WetterComAPI:
     def __init__(self):
@@ -15,7 +19,7 @@ class WetterComAPI:
         self.localeCountry = 'GB'
         self.cloudUrl = None
         self.cloudTs = 0
-        self.cachePath = os.path.join("cache", "wetter.com")
+        self.cachePath = Path("cache") / "wetter.com"
 
     def setLocale(self, lang, country):
         self.localeLang = lang
@@ -36,13 +40,12 @@ class WetterComAPI:
         filename = f"radar_{ts},{z_},{x_},{y_}.dat"
 
         # check for subfolders and create them if needed
-        if not os.path.exists(self.cachePath):
-            os.makedirs(self.cachePath)
+        self.cachePath.mkdir(parents=True, exist_ok=True)
 
-        filename = os.path.join(self.cachePath, filename)
-        if os.path.exists(filename):
+        filepath = self.cachePath / filename
+        if filepath.exists():
             # load existing file and return image
-            img = Image.open(filename, formats=['jpeg', 'png']).convert("RGBA")
+            img = Image.open(filepath, formats=['jpeg', 'png']).convert("RGBA")
             return img
 
         # get radar image
@@ -64,9 +67,9 @@ class WetterComAPI:
         if req.status_code == 200:
             # on success: save image to file system and load as RGBA image
             data = req.content
-            with open(filename, "wb") as f:
+            with open(filepath, "wb") as f:
                 f.write(data)
-            img = Image.open(filename, formats=['jpeg', 'png']).convert("RGBA")
+            img = Image.open(filepath, formats=['jpeg', 'png']).convert("RGBA")
         else:
             img = None
 
@@ -89,15 +92,15 @@ class WetterComAPI:
         req = requests.get(url, allow_redirects=True, headers=headers)
         if req.status_code != 200:
             # no success!
-            print(f"WetterComAPI::getRadarStatus(): Request Error: {req.status_code}")
+            logger.error(f"WetterComAPI::getRadarStatus(): Request Error: {req.status_code}")
             return None
         response = req.content
         # try to decode content
         if isinstance(response, (bytes, bytearray)):
             try:
                 response = json.loads(response.decode('utf-8'))
-            except:
-                print(f"WetterComAPI::getRadarStatus(): Could not decode response!")
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                logger.error("WetterComAPI::getRadarStatus(): Could not decode response!")
                 response = dict()
         return response
     
@@ -139,7 +142,7 @@ class WetterComAPI:
         req = requests.get(url, allow_redirects=True, headers=headers)
         if req.status_code != 200:
             # no success!
-            print("Error (WetterComAPI::updateCloudUrl): Error on request of Cloud URL!")
+            logger.error("WetterComAPI::updateCloudUrl(): Error on request of Cloud URL!")
             return None
         response = req.content
 
@@ -147,7 +150,7 @@ class WetterComAPI:
         if isinstance(response, (bytes, bytearray)):
             try:
                 response = json.loads(response.decode('utf-8'))
-            except:
+            except (json.JSONDecodeError, UnicodeDecodeError):
                 response = dict()
         
         ts = int(time.time())
@@ -160,25 +163,24 @@ class WetterComAPI:
                     self.cloudUrl = "https://ct3.wettercomassets.com/" + step['tile_url']
                     self.cloudTs = ts
                     break
-        except:
+        except (KeyError, TypeError, IndexError):
             self.cloudUrl = None
     
     def getCloudImage(self, x, y, z):
         if not self.cloudUrl:
-            print("Error: Cloud URL not updated!")
+            logger.error("Cloud URL not updated!")
             return None
 
         url = self.cloudUrl.format(z=z,x=x,y=y)
         filename = f"clouds_{self.cloudTs},{z},{x},{y}.dat"
 
         # check for subfolders and create them if needed
-        if not os.path.exists(self.cachePath):
-            os.makedirs(self.cachePath)
+        self.cachePath.mkdir(parents=True, exist_ok=True)
 
-        filename = os.path.join(self.cachePath, filename)
-        if os.path.exists(filename):
+        filepath = self.cachePath / filename
+        if filepath.exists():
             # load existing file and return image
-            img = Image.open(filename, formats=['jpeg', 'png']).convert("RGBA")
+            img = Image.open(filepath, formats=['jpeg', 'png']).convert("RGBA")
             return img
 
         headers = {
@@ -192,11 +194,11 @@ class WetterComAPI:
         if req.status_code == 200:
             # on success: save image to file system and load as RGBA image
             data = req.content
-            with open(filename, "wb") as f:
+            with open(filepath, "wb") as f:
                 f.write(data)
-            img = Image.open(filename, formats=['jpeg', 'png']).convert("RGBA")
+            img = Image.open(filepath, formats=['jpeg', 'png']).convert("RGBA")
         else:
-            print("Error (WetterComAPI::getCloudImage): req.status_code:", req.status_code)
+            logger.error(f"WetterComAPI::getCloudImage(): req.status_code: {req.status_code}")
             img = None
         return img
 
@@ -207,4 +209,4 @@ if __name__ == "__main__":
 
     wc = WetterComAPI()
     wc.updateCloudUrl()
-    print(wc.cloudUrl)
+    logger.info(f"Cloud URL: {wc.cloudUrl}")

@@ -86,10 +86,10 @@ class CanvasToolTip(object):
     """
     create a tooltip for a given widget
     """
-    def __init__(self, canvas, widget, text='widget info', delay=0, justify='left'):
+    def __init__(self, canvas, widget, text='widget info', delay=0, justify='left', offset=(4, 12)):
         self.waittime = delay     #miliseconds
         self.wraplength = 320   #pixels
-        self.posOffset = (4, 12) #(x,y)
+        self.posOffset = offset
         self.canvas = canvas
         self.widget = widget
         self.text = text
@@ -148,7 +148,7 @@ class CanvasToolTip(object):
         self.text = text
         try:
             self.label.configure(text=text)
-        except:
+        except (AttributeError, tk.TclError):
             pass
         # create TK event bindings
         self.canvas.tag_bind(self.widget, "<Enter>", self.enter)

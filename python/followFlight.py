@@ -3,7 +3,6 @@
 '''
 
 from FlightRadar24_patch.api import FlightRadar24API
-from configparser import ConfigParser
 from hover import CanvasToolTip
 from sprites import Sprites
 from tiles import Tiles
@@ -12,8 +11,12 @@ from coords import *
 from helper import Dict2Class, ft2km, kts2kmh
 from iss import IssAPI
 from skyaware import SkyawareAPI
+from logger import get_logger
+from config_manager import get_config
 import tkinter as tk
-import time, json, os, sys
+import time, json, sys
+
+logger = get_logger(__name__)
 
 class FollowFlight:
   def __init__(self, tk_root, flight, fr_api=None, saveHistory=False, destroyEvent=None) -> None:
@@ -26,21 +29,29 @@ class FollowFlight:
     else:
       self.top.protocol("WM_DELETE_WINDOW", self._destroy)
 
-    # config defaults
-    self.home = (52.5162767,13.3777761)
-    self.zoom = 10
-    self.mapGrid = (4,4)
-    self.mapTiles = dict(basemap="terrain", roadmap=False, brightness=0.4)
-    self.tileSize = 256   # must remain fixed by now
-    self.centerview = True
-    self.maxtrail = 100
+    # Load configuration
+    config = get_config()
+    home_cfg = config.home
+    app_cfg = config.follow_flight
 
-    # config loader, overriding defaults where available
-    self.localeLang = 'en'
-    self.localeCountry = 'EN'
-    self.enableRadar = False
-    self.enableClouds = False
-    self.loadConfig()
+    # Apply configuration
+    self.home = home_cfg.location
+    self.zoom = home_cfg.zoom
+    self.zoom_offset = 0
+    self.localeLang = home_cfg.locale_lang
+    self.localeCountry = home_cfg.locale_country
+
+    self.mapGrid = app_cfg.grid
+    self.mapTiles = dict(
+        basemap=app_cfg.map_tiles.basemap,
+        roadmap=app_cfg.map_tiles.roadmap,
+        brightness=app_cfg.map_tiles.brightness
+    )
+    self.tileSize = 256  # fixed tile size
+    self.centerview = app_cfg.centerview
+    self.maxtrail = app_cfg.max_trail
+    self.enableRadar = app_cfg.enable_rain_radar
+    self.enableClouds = app_cfg.enable_cloud_radar
 
     # load sprites
     self.sprites = Sprites()
@@ -65,7 +76,8 @@ class FollowFlight:
       try:
         self.iconImage = self.sprites.getIcon(f, 80, alt=7.25, s=0.5, v=2.0)
         self.top.wm_iconphoto(False, self.iconImage)
-      except:
+        self.top.iconphoto(False, self.iconImage)
+      except (tk.TclError, AttributeError, KeyError):
         pass
     else:
       self.flight = flight
@@ -119,67 +131,33 @@ class FollowFlight:
     self.is_alive = False
     try:
       self.top.destroy()
-    except:
+    except tk.TclError:
       pass
-
-  def loadConfig(self):
-    ''' Config loader '''
-    if not os.path.exists('config.ini'):
-      print("No configuration file 'config.ini' found!")
-      sys.exit()
-
-    config = ConfigParser()
-    config.read('config.ini')
-    app = 'FollowFlight'
-
-    # get HOME location
-    if 'HOME' in config:
-      if 'latitude' in config['HOME'] and 'longitude' in config['HOME']:
-        lat = config.getfloat('HOME','latitude')
-        lng = config.getfloat('HOME','longitude')
-        self.home = (lat,lng)
-      else:
-        print(f'loadConfig(): HOME config incomplete!')
-      if 'zoom' in config['HOME']:
-        self.zoom = config.getint('HOME','zoom')
-      if 'localeLang' in config['HOME']:
-        self.localeLang = config['HOME']['localeLang']
-      if 'localeCountry' in config['HOME']:
-        self.localeCountry = config['HOME']['localeCountry']
-
-    if app in config:
-      if 'grid' in config[app]:
-        values = config.get(app,'grid').split(',')
-        self.mapGrid = (int(values[0]),int(values[1]))
-      if 'basemap' in config[app]:
-        self.mapTiles['basemap'] = config.get(app,'basemap')
-      if 'roadmap' in config[app]:
-        self.mapTiles['roadmap'] = config.getboolean(app,'roadmap')
-      if 'brightness' in config[app]:
-        self.mapTiles['brightness'] = config.getfloat(app,'brightness')
-      if 'centerview' in config[app]:
-        self.centerview = config.getboolean(app,'centerview')
-      if 'maxtrail' in config[app]:
-        self.maxtrail = config.getint(app,'maxtrail')
-      if 'enableRainRadar' in config[app]:
-        self.enableRadar = config.getboolean(app,'enableRainRadar')
-      if 'enableCloudRadar' in config[app]:
-        self.enableClouds = config.getboolean(app,'enableCloudRadar')
-    else:
-      print(f'{app} not found!')
 
   def onKey(self, event):
     if event.char == "c":
       self.tiles.toggleClouds()
       self.tiles.update(self.latitude, self.longitude, self.zoom, force=True)
+      self.top.update()
     elif event.char == "r":
       self.tiles.toggleRadar()
       self.tiles.update(self.latitude, self.longitude, self.zoom, force=True)
+      self.top.update()
+    elif event.char == '+':
+      self.zoom += 1
+      self.zoom_offset += 1
+      self.tiles.update(self.latitude, self.longitude, self.zoom)
+      self.top.update()
+    elif event.char == '-':
+      self.zoom -= 1
+      self.zoom_offset -= 1
+      self.tiles.update(self.latitude, self.longitude, self.zoom)
+      self.top.update()
 
   def getFlightsData(self, bounds):
     try:
       return self.fr_api.get_flights(bounds=bounds, flight_id=self.flight)
-    except:
+    except Exception:
       return list()
 
   def visualize(self, f, details={}):
@@ -201,6 +179,7 @@ class FollowFlight:
     # auto-set zoom level according to flight altitude and speed
     self.zoom = max(8, int(16/(alt_km+2)+8))
     self.zoom += max(int(18-spd) // 10, 0)
+    self.zoom += self.zoom_offset
 
     x,y = worldToPixel(lngToXWorld(lng), latToYWorld(lat), self.zoom)
 
@@ -233,11 +212,10 @@ class FollowFlight:
       self.C.lift(self.icon)
       if self.tiles.focus:
         self.C.lower(self.tiles.focus)
-    except:
+    except (tk.TclError, AttributeError, KeyError):
       self.C.moveto(self.tiles.focus, sx-5, sy-5)
       if self.tiles.focus:
         self.C.lift(self.tiles.focus)
-      #pass
 
     # update Tooltips
     if "status" in details:
@@ -285,16 +263,17 @@ class FollowFlight:
   def saveFlightDetails(self, details):
       try:
         l = len(details["trail"])
-      except:
+      except (KeyError, TypeError):
+        logger.warning("Flight details are not available!")
         return
-      
+
       # try to give meaningful name if data are available
       try:
         ts = int(details["firstTimestamp"])
         airline = details["airline"]["code"]["iata"]
         orig = details["airport"]["origin"]["code"]["iata"]
         dest = details["airport"]["destination"]["code"]["iata"]
-      except:
+      except (KeyError, TypeError):
         filename = f"{self.flight}_details.json"
       else:
         filename = f"{time.strftime('%Y%m%d', time.localtime(ts))}_{airline}_{orig}>{dest}.json"
@@ -302,7 +281,18 @@ class FollowFlight:
       if l > 0:
         with open(filename, 'w') as fp:
           json.dump(details, fp, sort_keys=True, indent=2)
-        print(f"Flight details saved to file '{filename}'")
+        logger.info(f"Flight details saved to file '{filename}'")
+      else:
+        #flight_details = self.fr_api.get_history_data(self.flight, 'kml', time.time())
+        #print(ts)
+        logger.debug(f"Details: {details}")
+        logger.warning("Flight trail is not available! Try getting playback data...")
+        f = Dict2Class(dict(id=self.flight))
+        ts = 1732498800
+        flight_playback = self.fr_api.get_flight_playback(f, ts)
+        with open(filename, 'w') as fp:
+          json.dump(flight_playback, fp, sort_keys=True, indent=2)
+        logger.info(f"Playback details saved to file '{filename}'")
 
   def getLatestLoc(self, tau=0.01):
     lat,lng = self.past_loc
@@ -339,6 +329,7 @@ class FollowFlight:
 
         # update window icon (aircraft icon and heading)
         self.top.wm_iconphoto(False, self.iconImage)
+        self.top.iconphoto(False, self.iconImage)
 
     if not found:
       if tau < 0:
@@ -405,16 +396,14 @@ class FollowFlight:
       ok = False
       try:
         ok = self.getLatestLoc()
-#      except Exception as e: # work on python 3.x
-#        print('Error:', str(e))
-      except:
+      except Exception:
         pass
 
       details = self.past_details
       if self.online and not ok and self.saveHistory:
         self.saveFlightDetails(details)
       elif not self.online and self.past_details is None:
-        print(f'Flight {self.flight} is offline!')
+        logger.info(f'Flight {self.flight} is offline!')
         f = Dict2Class(dict(id=self.flight))
         details = self.fr_api.get_flight_details(f)
         #self.visualize(f, details)
@@ -427,16 +416,16 @@ class FollowFlight:
       if not ok:
         try:
           callsign = details['identification']['callsign']
-        except:
+        except (KeyError, TypeError):
           callsign = "N/A"
         title = f"Follow Flight - {callsign} - OFFLINE"
         try:
           self.top.title(title)
-        except:
+        except tk.TclError:
           pass
         self.lost_count += 1
         if self.lost_count >= 10:
-          print(f"Flight '{callsign}' ({self.flight}) turned offline. Bye bye!")
+          logger.info(f"Flight '{callsign}' ({self.flight}) turned offline. Bye bye!")
           return
 
     # update every 2 second
@@ -469,36 +458,7 @@ class FollowFlight:
     if 'lat' in f and 'lng' in f:
       #x,y = latlngToPixel((f['lat'], f['lng']), self.zoom)
       #print(" =>", x,y, x-self.latitude, y-self.longitude, self.tiles.offset)
-      print(f)
+      logger.debug(f"Skyaware data: {f}")
       return f['time'], f['lat'], f['lng']
     
     return None
-
-    # update map tiles, returns new projection parameters onto them
-    #self.center, offx, offy = self.tiles.update(x, y, self.zoom)
-    self.latitude = x
-    self.longitude = y
-    self.tiles.update(x, y, self.zoom)
-    trail = self.trails.update(details)
-
-    if len(trail) >= 4:
-      self.C.coords(self.trailPoly, trail)
-      self.C.lift(self.trailPoly)
-    
-    # update position marker
-    sx,sy = self.tiles.getPlanePos()
-
-    # handle plane icon
-    if self.icon:
-      self.C.delete(self.icon)
-    try:
-      self.iconImage = self.sprites.getIcon(f, 80, None)
-      self.icon = self.C.create_image((sx+3, sy+3), image=self.iconImage)
-      self.C.lift(self.icon)
-      if self.tiles.focus:
-        self.C.lower(self.tiles.focus)
-    except:
-      self.C.moveto(self.tiles.focus, sx-5, sy-5)
-      if self.tiles.focus:
-        self.C.lift(self.tiles.focus)
-      #pass

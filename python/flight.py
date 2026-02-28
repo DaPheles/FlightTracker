@@ -6,18 +6,84 @@ from FlightRadar24_patch.api import FlightRadar24API
 from hover import CanvasToolTip
 from coords import *
 from helper import ft2km, kts2kmh, hsv2rgb
+from logger import get_logger
 import tkinter as tk
 from threading import Thread
 from followFlight import FollowFlight
 import numpy as np
+from typing import Tuple, Optional
+
+logger = get_logger(__name__)
+
 
 def _rotate(matrix, degrees):
     rad = degrees*np.pi/180
     m_rot = np.array([[np.cos(rad), np.sin(rad)],[-np.sin(rad), np.cos(rad)]])
     return np.matmul(matrix, m_rot)
 
+
+class FlightFactory:
+    """
+    Factory for creating fully initialized Flight objects.
+
+    Usage:
+        factory = FlightFactory(tk_root, fr_api, canvas, sprites)
+        flight = factory.create(
+            offsets=(offset_x, offset_y),
+            zoom=11,
+            max_flight_age=1200
+        )
+    """
+
+    def __init__(self, tk_root, fr_api: FlightRadar24API, canvas: tk.Canvas, sprites):
+        """
+        Initialize factory with shared dependencies.
+
+        Args:
+            tk_root: Tkinter root window
+            fr_api: FlightRadar24 API instance
+            canvas: Tkinter canvas for rendering
+            sprites: Sprites instance for aircraft icons
+        """
+        self._tk_root = tk_root
+        self._fr_api = fr_api
+        self._canvas = canvas
+        self._sprites = sprites
+
+    def create(
+        self,
+        offsets: Tuple[int, int] = (0, 0),
+        zoom: int = 11,
+        max_flight_age: int = 900,
+        centerview: bool = True
+    ) -> 'Flight':
+        """
+        Create a fully initialized Flight instance.
+
+        Args:
+            offsets: (x, y) pixel offsets for positioning
+            zoom: Map zoom level
+            max_flight_age: Maximum age to keep flight data (seconds)
+            centerview: Whether to center view on flight
+
+        Returns:
+            Fully initialized Flight object
+        """
+        flight = Flight(
+            self._tk_root,
+            self._fr_api,
+            self._canvas,
+            maxFlightAge=max_flight_age,
+            centerview=centerview
+        )
+        flight.init_offsets(offsets[0], offsets[1])
+        flight.init_sprites(self._sprites)
+        flight.init_zoom(zoom)
+        return flight
+
+
 class Flight(object):
-  def __init__(self, tk_root, fr_api:FlightRadar24API, canvas:tk.Canvas, maxFlightAge=900, centerview=True):
+  def __init__(self, tk_root, fr_api: FlightRadar24API, canvas: tk.Canvas, maxFlightAge=900, centerview=True):
     self.tk = tk_root
     self.fr_api = fr_api
     self.C = canvas
@@ -39,6 +105,7 @@ class Flight(object):
     self.last_ts = -1
     self.last_ping = -1
     self.history_loaded = False
+    self.sprites = None  # Set via init_sprites or factory
 
   def cleanup(self):
     for o in self.objects:
@@ -77,19 +144,19 @@ class Flight(object):
   def update_about_content(self, fl, details):
     try:
       aircraft_info = details['aircraft']['model']['text']
-    except:
+    except (KeyError, TypeError):
       aircraft_info = "N/A"
     try:
       airline_name = fl.airline_name
-    except:
+    except AttributeError:
       airline_name = "N/A"
     try:
       origin_airport_name = fl.origin_airport_name
-    except:
+    except AttributeError:
       origin_airport_name = "N/A"
     try:
       destination_airport_name = fl.destination_airport_name
-    except:
+    except AttributeError:
       destination_airport_name = "N/A"
     self.about = f"{airline_name} ({aircraft_info})\n"\
       f"\u2190 {origin_airport_name}\n"\
@@ -137,9 +204,14 @@ class Flight(object):
     if sx >= -self.xSize/8 and sx < 9*self.xSize/8 and \
        sy >= -self.ySize/8 and sy < 9*self.ySize/8:
       if not self.history_loaded:
-        details = self.fr_api.get_flight_details(fl)
-        # FIXME: weird API loop, still required here??
-        fl.set_flight_details(details)
+        try:
+          details = self.fr_api.get_flight_details(fl)
+          # FIXME: weird API loop, still required here??
+          fl.set_flight_details(details)
+        except Exception as e:
+          logger.error(f"Failed to get flight details: {e}")
+          return
+
         self.update_about_content(fl, details)
 
         # load trail history from details
@@ -184,10 +256,11 @@ class Flight(object):
       # draw description / details
       if alt_km > 0:
         # in the air
+        y_off = isize//2
         try:
           plane = self.C.create_image([sx,sy], image=self.icon)
-          self.tts = CanvasToolTip(self.C, plane, self.about)
-        except:
+          self.tts = CanvasToolTip(self.C, plane, self.about, offset=(4,y_off))
+        except (tk.TclError, AttributeError):
           # fallback to show plane position with a simple circle
           plane = self.C.create_oval([sx-5,sy-5,sx+5,sy+5], fill='#6688FF')
 
@@ -196,10 +269,10 @@ class Flight(object):
         self.lifts.append(plane)
 
         # show details when being up in the air
-        l1 = self.C.create_text([sx+2,sy+20], text=fl.callsign, font=('Helvetica','10'), fill='gray10')
-        l2 = self.C.create_text([sx,sy+18], text=fl.callsign, font=('Helvetica','10'), fill='gold')
-        l3 = self.C.create_text([sx,sy+30], text=f"{ori}\u2192{dst}", font=('Helvetica','8'), fill='gold')
-        l4 = self.C.create_text([sx,sy+40], text=f"{alt_km:.2f}km | {gsp_kmh:.1f}km/h", font=('Helvetica','8'), fill='gold')
+        l1 = self.C.create_text([sx+2,sy+y_off+10], text=fl.callsign, font=('Helvetica','10'), fill='gray10')
+        l2 = self.C.create_text([sx,sy+y_off+ 8], text=fl.callsign, font=('Helvetica','10'), fill='gold')
+        l3 = self.C.create_text([sx,sy+y_off+20], text=f"{ori}\u2192{dst}", font=('Helvetica','8'), fill='gold')
+        l4 = self.C.create_text([sx,sy+y_off+30], text=f"{alt_km:.2f}km | {gsp_kmh:.1f}km/h", font=('Helvetica','8'), fill='gold')
         self.lifts.extend([l1, l2, l3, l4])
         self.objects.extend([l1, l2, l3, l4])
       else:

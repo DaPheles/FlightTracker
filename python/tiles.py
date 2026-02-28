@@ -2,7 +2,7 @@
     handle map tiles
 '''
 
-import os, time
+import time
 from PIL import Image, ImageTk
 from coords import *
 from wettercom import WetterComAPI

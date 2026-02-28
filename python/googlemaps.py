@@ -2,13 +2,16 @@
     helper class to handle Google Maps tiles
 '''
 
-import os
+from pathlib import Path
 import requests
 from PIL import Image
+from logger import get_logger
+
+logger = get_logger(__name__)
 
 class GoogleMapsAPI(object):
     def __init__(self):
-        self.cachePath = os.path.join("cache", "tiles")
+        self.cachePath = Path("cache") / "tiles"
         self.localeLang = 'en'
         self.localeCountry = 'GB'
         self.server = 0
@@ -18,14 +21,13 @@ class GoogleMapsAPI(object):
         self.localeCountry = country
 
     def getTileImage(self, x, y, z, tileSize, style, debug=False):
-        dirname = os.path.join(self.cachePath, style, str(z))
+        tile_dir = self.cachePath / style / str(z)
 
         # check for subfolders and create them if not available
-        if not os.path.exists(dirname):
-            os.makedirs(dirname)
+        tile_dir.mkdir(parents=True, exist_ok=True)
 
-        filename = os.path.join(dirname, f"{x},{y}.dat")
-        if not os.path.exists(filename):
+        filepath = tile_dir / f"{x},{y}.dat"
+        if not filepath.exists():
             headers = {
                 "accept": "image/avif,image/webp,*/*",
                 "accept-encoding": "gzip, br",
@@ -49,8 +51,7 @@ class GoogleMapsAPI(object):
                 #    "pragma": "no-cache",
                 #    "upgrade-insecure-requests": "1"
                 #}
-                #v = 988     # API version, may be incremented from time to time
-                v = 946     # API version, may be incremented from time to time
+                v = 997     # API version, may be incremented from time to time
                 headers = {
                     "accept": "image/avif,image/webp,*/*",
                     "accept-encoding": "gzip, br",
@@ -78,18 +79,18 @@ class GoogleMapsAPI(object):
             # try to download image
             req = requests.get(url, allow_redirects=True, headers=headers)
             if req.status_code == 200:
-                if debug: print(f"Downloading success of '{style}' tile ({url})!")
+                logger.debug(f"Downloaded '{style}' tile: {url}")
                 # on success: save image to file system and load as RGBA image
                 data = req.content
-                with open(filename, "wb") as f:
+                with open(filepath, "wb") as f:
                     f.write(data)
-                img = Image.open(filename, formats=["jpeg","png"]).convert("RGBA")
+                img = Image.open(filepath, formats=["jpeg","png"]).convert("RGBA")
             else:
-                if debug: print(f"Error downloading '{style}' tile: Status={req.status_code} ({url})")
+                logger.warning(f"Error downloading '{style}' tile: Status={req.status_code} ({url})")
                 # image data not successfully downloaded, use pink image by default
                 img = Image.new(mode="RGBA", size=(tileSize, tileSize), color="pink")
         else:
             # if filename exists: load as RGBA image
-            img = Image.open(filename, formats=["jpeg","png"]).convert("RGBA")
+            img = Image.open(filepath, formats=["jpeg","png"]).convert("RGBA")
 
         return img

@@ -1,6 +1,5 @@
 from urllib import request
-import datetime, time
-import math
+import time
 import json
 
 class SkyawareAPI:

@@ -97,14 +97,14 @@ class Trails(object):
                 #self.trail = self.fr_api.get_flight_details(self.flight)
                 try:
                     self.trail = self.getFlightHistory()
-                except:
+                except Exception:
                     return list()
                 self.trailHQ = len(self.trail)
                 self.updateTS = time.time()
             elif len(details) == 0:
                 try:
                     details = self.fr_api.get_flight_details(self.f)
-                except:
+                except Exception:
                     # do nothing
                     return list()
 

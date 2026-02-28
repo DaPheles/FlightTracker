@@ -10,7 +10,7 @@ class IssAPI:
 
     def init_iss(self):
         # get Two-line element set of ISS (ZARYA) for position prediction
-        url = "http://celestrak.org/NORAD/elements/stations.txt"
+        url = "https://celestrak.org/NORAD/elements/stations.txt"
         response = request.urlopen(url).read().decode()
         # extract ISS data in first 3 lines
         tle = response.split("\n")[0:3]
