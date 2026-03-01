@@ -125,3 +125,29 @@ TRAIL_HUE_LOW = 0  # Red for low altitude
 TRAIL_HUE_MEDIUM = 60  # Yellow for medium altitude
 TRAIL_HUE_HIGH = 120  # Green for high altitude
 TRAIL_HUE_CRUISING = 240  # Blue for cruising altitude
+
+# ============================================================================
+# EKF (Extended Kalman Filter) Constants
+# ============================================================================
+
+EKF_EARTH_RADIUS_M     = EARTH_RADIUS_KM * 1000.0   # ~6_372_800 m
+DEFAULT_ANIMATION_RATE = 5.0    # Hz
+MIN_ANIMATION_INTERVAL = 50     # ms floor (20 Hz max)
+EKF_HEADING_THRESHOLD  = 5.0    # deg — minimum heading change to regen icon
+EKF_RAW_TRAIL_LEN      = 6      # raw FR24 samples to keep for velocity regression (~19 s at 3.2 s/update)
+
+# Turn-rate exponential-decay time constant (seconds).
+# The EKF's omega (deg/s) state decays as omega *= exp(-dt / tau) during prediction,
+# so a detected turn gradually straightens out if not reinforced by new measurements.
+EKF_OMEGA_TAU = 60.0
+
+# Process noise diagonal (lat, lng, hdg, vg, alt, valt, omega)
+EKF_Q  = [1e-10, 1e-10, 0.01, 0.01, 0.1, 0.05, 0.05]
+
+# Measurement noise diagonal (lat, lng, hdg, vg, alt) — valt, omega not directly observed
+# Position stds ~30-40 m (realistic for FR24/ADS-B display quantisation).
+# Larger values → smaller Kalman gain → EKF leans on smooth prediction, not raw samples.
+EKF_R  = [(3e-4)**2, (4e-4)**2, 25.0, 4.0, 1e4]
+
+# Initial state covariance diagonal (lat, lng, hdg, vg, alt, valt, omega)
+EKF_P0 = [(1e-4)**2, (1.5e-4)**2, 225.0, 100.0, 250000.0, 25.0, 9.0]

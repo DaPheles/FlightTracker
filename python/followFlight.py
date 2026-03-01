@@ -11,15 +11,18 @@ from coords import *
 from helper import Dict2Class, ft2km, kts2kmh
 from iss import IssAPI
 from skyaware import SkyawareAPI
+from flight_ekf import FlightEKF
+from constants import EKF_RAW_TRAIL_LEN, EKF_EARTH_RADIUS_M
 from logger import get_logger
 from config_manager import get_config
 import tkinter as tk
-import time, json, sys
+import numpy as np
+import time, json, sys, threading
 
 logger = get_logger(__name__)
 
 class FollowFlight:
-  def __init__(self, tk_root, flight, fr_api=None, saveHistory=False, destroyEvent=None) -> None:
+  def __init__(self, tk_root, flight, fr_api=None, saveHistory=False, destroyEvent=None, initial_flight=None) -> None:
     self.tk = tk_root
     self.top = tk.Toplevel()
     self.top.title("Follow Flight")
@@ -52,6 +55,8 @@ class FollowFlight:
     self.maxtrail = app_cfg.max_trail
     self.enableRadar = app_cfg.enable_rain_radar
     self.enableClouds = app_cfg.enable_cloud_radar
+    self.enableEkf = app_cfg.enable_ekf
+    self._anim_interval_ms = max(50, int(1000.0 / app_cfg.animation_rate))
 
     # load sprites
     self.sprites = Sprites()
@@ -89,10 +94,20 @@ class FollowFlight:
       self.online = False
       self.sa_api = SkyawareAPI()
 
+    # EKF state (disabled for ISS — its update rate is already 0.25 s)
+    self.ekf: FlightEKF = None
+    self._raw_trail_ekf: list = []
+
     self.now = time.time()
-    self.past_loc = self.home
+    self.past_loc = (initial_flight.latitude, initial_flight.longitude) \
+        if initial_flight is not None else self.home
     self.past_details = None
     self.lost_count = 0
+    self._initial_flight = initial_flight
+
+    # async fetch state (non-ISS mode)
+    self._fetching = False
+    self._pending_result = None
 
     # map stuff
     self.latitude = -1
@@ -107,8 +122,12 @@ class FollowFlight:
     self.tiles.enableRadar = self.enableRadar
     self.tiles.enableClouds = self.enableClouds
     self.tiles.setLocale(self.localeLang, self.localeCountry)
-    homeX, homeY = latlngToPixel(self.home, self.zoom)
-    self.tiles.update(homeX, homeY, self.zoom, force=True)
+    if initial_flight is not None:
+      initX, initY = worldToPixel(lngToXWorld(initial_flight.longitude),
+                                   latToYWorld(initial_flight.latitude), self.zoom)
+    else:
+      initX, initY = latlngToPixel(self.home, self.zoom)
+    self.tiles.update(initX, initY, self.zoom, force=True)
 
     # trails
     self.trails = Trails(self.fr_api, flight, self.tiles, self.maxtrail, self.centerview)
@@ -123,7 +142,9 @@ class FollowFlight:
 
     # start periodic update cycles
     self.top.bind('<KeyPress>', self.onKey)
-    self.C.after(0,self._update)
+    self.C.after(0, self._update)
+    if self.enableEkf and not self.iss_mode:
+      self.C.after(self._anim_interval_ms, self._anim_loop)
     self.is_alive = True
 
   def _destroy(self):
@@ -160,6 +181,67 @@ class FollowFlight:
     except Exception:
       return list()
 
+  def _fetch_bg(self):
+    """Background thread: locate flight with expanding bounds and fetch details."""
+    result = {'ok': False, 'f': None, 'details': None, 'ts': None, 'lat': None, 'lng': None}
+    try:
+      lat, lng = self.past_loc
+    except (TypeError, ValueError):
+      self._pending_result = result
+      self._fetching = False
+      return
+
+    tau = 0.01
+    found = False
+    while True:
+      if tau < 0:
+        bounds = "77.879,-77.88,-180,180"
+      else:
+        bounds = f"{lat+tau:.3f},{lat-tau:.3f},{lng-tau:.3f},{lng+tau:.3f}"
+
+      for f in self.getFlightsData(bounds):
+        if f.id == self.flight:
+          found = True
+          f_lat = f.latitude
+          f_lng = f.longitude
+          f_ts  = f.time
+          self.flight_icao = f.icao_24bit
+
+          # supplement with local ADS-B receiver if available
+          if self.sa_api and self.flight_icao and self.past_details is not None:
+            try:
+              sa_data = self.update_sa(self.flight_icao)
+              if sa_data is not None and sa_data[0] > f_ts + 0.11:
+                f_ts, f_lat, f_lng = sa_data
+            except Exception:
+              pass
+
+          try:
+            details = self.fr_api.get_flight_details(f)
+            f.set_flight_details(details)
+          except Exception:
+            details = {}
+
+          result['ok']      = True
+          result['f']       = f
+          result['details'] = details
+          result['ts']      = f_ts
+          result['lat']     = f_lat
+          result['lng']     = f_lng
+          break
+
+      if found:
+        break
+      if tau < 0:
+        break
+      elif tau < 10:
+        tau *= 8
+      else:
+        tau = -1
+
+    self._pending_result = result
+    self._fetching = False
+
   def visualize(self, f, details={}):
     alt = f.altitude
     #ts  = f.time
@@ -187,7 +269,23 @@ class FollowFlight:
     if 'trail' in details:
       tileLoc += f", History: {len(details['trail'])}"
 
-    self.past_loc = (lat,lng)
+    self.past_loc = (lat, lng)
+
+    # EKF update: seed or correct the predictor with the new FR24 measurement
+    if self.enableEkf:
+      self._raw_trail_ekf.append((float(f.time), f.latitude, f.longitude,
+                                   float(f.ground_speed), float(f.heading),
+                                   float(f.altitude)))
+      if len(self._raw_trail_ekf) > EKF_RAW_TRAIL_LEN:
+        del self._raw_trail_ekf[:-EKF_RAW_TRAIL_LEN]
+      smooth_spd, smooth_hdg, valt_ft_s = self._smooth_velocity_ff()
+      if self.ekf is None:
+        self.ekf = FlightEKF(f.latitude, f.longitude, smooth_hdg,
+                             smooth_spd, f.altitude, valt_ft_s)
+      else:
+        self.ekf.step(time.monotonic())
+        self.ekf.update(f.latitude, f.longitude, smooth_hdg,
+                        smooth_spd, f.altitude, valt_ft_s)
 
     # update map tiles, returns new projection parameters onto them
     #self.center, offx, offy = self.tiles.update(x, y, self.zoom)
@@ -379,6 +477,111 @@ class FollowFlight:
       if self.tiles.focus:
         self.C.lower(self.tiles.focus)
 
+  def _anim_loop(self) -> None:
+    """High-frequency EKF animation — smooth map panning (centerview) or icon movement."""
+    if not self.is_alive:
+      return
+    if self.ekf is not None and self.icon is not None:
+      self.ekf.step(time.monotonic())
+      ekf_x, ekf_y = worldToPixel(lngToXWorld(self.ekf.lng),
+                                   latToYWorld(self.ekf.lat), self.zoom)
+      # tiles.update() repositions tile images (no new downloads unless tile index changes)
+      self.tiles.update(ekf_x, ekf_y, self.zoom)
+      sx, sy = self.tiles.getPlanePos()
+      try:
+        self.C.coords(self.icon, sx, sy)
+      except tk.TclError:
+        pass
+    self.C.after(self._anim_interval_ms, self._anim_loop)
+
+  def _smooth_velocity_ff(self) -> tuple:
+    """Compute (speed_kts, heading_deg, valt_ft_s) from the raw EKF trail buffer.
+
+    Mirrors Flight._smooth_velocity() — linear regression for valt, position-regression
+    heading blended with measured heading for smoother inter-update EKF predictions.
+    """
+    trail = self._raw_trail_ekf
+    N = len(trail)
+    if N == 0:
+      return 0.0, 0.0, 0.0
+    if N == 1:
+      p = trail[0]
+      return p[3], p[4], 0.0   # speed_kts, heading, valt=0
+
+    ts   = np.array([p[0] for p in trail])
+    lats = np.array([p[1] for p in trail])
+    lngs = np.array([p[2] for p in trail])
+    spds = np.array([p[3] for p in trail])
+    hdgs = np.array([p[4] for p in trail])
+    alts = np.array([p[5] for p in trail])
+    total_dt = ts[-1] - ts[0]
+
+    # Vertical speed via least-squares
+    if total_dt < 0.5:
+      valt_ft_s = 0.0
+    else:
+      t_c   = ts - ts.mean()
+      denom = float(np.dot(t_c, t_c))
+      valt_ft_s = float(np.dot(t_c, alts - alts.mean()) / denom) if denom > 1e-9 else 0.0
+
+    # Horizontal: circular mean of measured headings + position regression blend
+    hdg_rad  = np.deg2rad(hdgs)
+    meas_hdg = math.degrees(math.atan2(float(np.mean(np.sin(hdg_rad))),
+                                        float(np.mean(np.cos(hdg_rad))))) % 360.0
+    meas_spd = float(spds.mean())
+
+    if total_dt >= 2.0 and N >= 3:
+      t_c  = ts - ts.mean()
+      denom = float(np.dot(t_c, t_c))
+      vlat = float(np.dot(t_c, lats - lats.mean()) / denom)
+      vlng = float(np.dot(t_c, lngs - lngs.mean()) / denom)
+      lat_rad = math.radians(float(lats.mean()))
+      vlat_m  = vlat * (math.pi / 180.0) * EKF_EARTH_RADIUS_M
+      vlng_m  = vlng * (math.pi / 180.0) * EKF_EARTH_RADIUS_M * math.cos(lat_rad)
+      pos_speed_m_s = math.sqrt(vlat_m**2 + vlng_m**2)
+      pos_hdg       = math.degrees(math.atan2(vlng_m, vlat_m)) % 360.0
+      hdg_diff = abs((pos_hdg - meas_hdg + 180.0) % 360.0 - 180.0)
+      _KTS_TO_MS = 0.51444
+      if pos_speed_m_s > _KTS_TO_MS * 20.0 and hdg_diff < 30.0:
+        sin_h = math.sin(math.radians(pos_hdg)) + math.sin(math.radians(meas_hdg))
+        cos_h = math.cos(math.radians(pos_hdg)) + math.cos(math.radians(meas_hdg))
+        smooth_hdg = math.degrees(math.atan2(sin_h, cos_h)) % 360.0
+      else:
+        smooth_hdg = meas_hdg
+    else:
+      smooth_hdg = meas_hdg
+
+    return meas_spd, smooth_hdg, valt_ft_s
+
+  def _show_initial(self, fl) -> None:
+    """Show plane icon at known position immediately — no trail, no API call."""
+    lat = fl.latitude
+    lng = fl.longitude
+    alt_km = ft2km(fl.altitude)
+    spd = fl.ground_speed  # knots — same units used in visualize()
+
+    self.zoom = max(8, int(16 / (alt_km + 2) + 8))
+    self.zoom += max(int(18 - spd) // 10, 0)
+    self.zoom += self.zoom_offset
+
+    x, y = worldToPixel(lngToXWorld(lng), latToYWorld(lat), self.zoom)
+    self.latitude = x
+    self.longitude = y
+    self.tiles.update(x, y, self.zoom)
+
+    sx, sy = self.tiles.getPlanePos()
+    if self.icon:
+      self.C.delete(self.icon)
+    try:
+      self.iconImage = self.sprites.getIcon(fl, 80, alt_km)
+      self.icon = self.C.create_image((sx, sy), image=self.iconImage)
+      self.C.lift(self.icon)
+      if self.tiles.focus:
+        self.C.lower(self.tiles.focus)
+    except (tk.TclError, AttributeError, KeyError):
+      self.icon = None
+    self.top.update()
+
   # main update loop
   def _update(self):
     if self.iss_mode:
@@ -393,43 +596,60 @@ class FollowFlight:
 
     else:
 
-      ok = False
-      try:
-        ok = self.getLatestLoc()
-      except Exception:
-        pass
+      # Immediate pre-display using the flight object we already had at click time
+      if self._initial_flight is not None:
+        self._show_initial(self._initial_flight)
+        self._initial_flight = None
 
-      details = self.past_details
-      if self.online and not ok and self.saveHistory:
-        self.saveFlightDetails(details)
-      elif not self.online and self.past_details is None:
-        logger.info(f'Flight {self.flight} is offline!')
-        f = Dict2Class(dict(id=self.flight))
-        details = self.fr_api.get_flight_details(f)
-        #self.visualize(f, details)
-        if self.saveHistory:
+      # start background fetch if idle
+      if not self._fetching:
+        self._fetching = True
+        threading.Thread(target=self._fetch_bg, daemon=True).start()
+
+      # process pending result on main thread
+      if self._pending_result is not None:
+        result = self._pending_result
+        self._pending_result = None
+        ok = result['ok']
+
+        if ok:
+          lat, lng = result['lat'], result['lng']
+          if self.past_loc != (lat, lng):
+            self.trails.new((result['ts'], lat, lng))
+            self.visualize(result['f'], result['details'])
+          self.top.wm_iconphoto(False, self.iconImage)
+          self.top.iconphoto(False, self.iconImage)
+          self.past_details = result['details']
+
+        details = self.past_details
+        if self.online and not ok and self.saveHistory:
           self.saveFlightDetails(details)
-        #sys.exit()
+        elif not self.online and self.past_details is None:
+          logger.info(f'Flight {self.flight} is offline!')
+          f = Dict2Class(dict(id=self.flight))
+          details = self.fr_api.get_flight_details(f)
+          if self.saveHistory:
+            self.saveFlightDetails(details)
 
-      self.online = ok
+        self.online = ok
 
-      if not ok:
-        try:
-          callsign = details['identification']['callsign']
-        except (KeyError, TypeError):
-          callsign = "N/A"
-        title = f"Follow Flight - {callsign} - OFFLINE"
-        try:
-          self.top.title(title)
-        except tk.TclError:
-          pass
-        self.lost_count += 1
-        if self.lost_count >= 10:
-          logger.info(f"Flight '{callsign}' ({self.flight}) turned offline. Bye bye!")
-          return
+        if not ok:
+          try:
+            callsign = details['identification']['callsign']
+          except (KeyError, TypeError):
+            callsign = "N/A"
+          title = f"Follow Flight - {callsign} - OFFLINE"
+          try:
+            self.top.title(title)
+          except tk.TclError:
+            pass
+          self.lost_count += 1
+          if self.lost_count >= 10:
+            logger.info(f"Flight '{callsign}' ({self.flight}) turned offline. Bye bye!")
+            return
 
-    # update every 2 second
-    timestep = self.timestep if self.online else self.timestep_lost
+    # update every 2 seconds; only slow down once we have confirmed a miss
+    timestep = self.timestep if (self.online or self.lost_count == 0) else self.timestep_lost
 
     delta = int((timestep-(time.time()-self.now))*1000)
     if delta < 10:

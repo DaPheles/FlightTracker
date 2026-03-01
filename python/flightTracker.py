@@ -10,6 +10,7 @@ from config_manager import get_config
 from flight_service import get_flight_service
 import tkinter as tk
 import time
+import threading
 
 logger = get_logger(__name__)
 
@@ -43,6 +44,9 @@ class FlightTracker(tk.Tk):
     self.maxFlightAge = app_cfg.max_flight_age
     self.enableRadar = app_cfg.enable_rain_radar
     self.enableClouds = app_cfg.enable_cloud_radar
+    self.enableEkf = app_cfg.enable_ekf
+    self.animationRate = app_cfg.animation_rate
+    self._anim_interval_ms = max(50, int(1000.0 / self.animationRate))
 
     # Flight data service (handles API access)
     self._flight_service = get_flight_service()
@@ -78,7 +82,8 @@ class FlightTracker(tk.Tk):
     self.flights = dict()
 
     # Flight factory for creating flight objects
-    self._flight_factory = FlightFactory(self.tk, self._flight_service.api, self.C, self.sprites)
+    self._flight_factory = FlightFactory(self.tk, self._flight_service.api, self.C, self.sprites,
+                                          enable_ekf=self.enableEkf)
     self._flight_offsets = (self.xSize//2 - self.homeX, self.ySize//2 - self.homeY)
 
     # draw radar
@@ -100,9 +105,16 @@ class FlightTracker(tk.Tk):
     self.timeout = 900    ;# in seconds
     self.about = dict()
 
+    # async fetch state
+    self._fetching = False
+    self._pending_flights = None
+
     self.bind('<KeyPress>', self.onKey)
     self.update()
-    self.C.after(0,self._update)
+    self._start_fetch()   # kick off first fetch eagerly to reduce startup latency
+    self.C.after(0, self._update)
+    if self.enableEkf:
+      self.C.after(self._anim_interval_ms, self._anim_loop)
     self.fullscreen = False
     self.bind('<F12>', self.toggleFullscreen)
     #self.geometrySave = None
@@ -148,7 +160,33 @@ class FlightTracker(tk.Tk):
       """Get flights within the configured bounds using the flight service."""
       return self._flight_service.get_flights_in_bounds(self.bounds)
 
+  def _start_fetch(self):
+      """Start a background fetch if one is not already running."""
+      if self._fetching:
+          return
+      self._fetching = True
+      threading.Thread(target=self._fetch_bg, daemon=True).start()
+
+  def _fetch_bg(self):
+      """Fetch flight data in background thread; result stored in _pending_flights."""
+      try:
+          flights = self.getFlightsData()
+      except Exception:
+          flights = []
+      self._pending_flights = flights
+      self._fetching = False
+
+  def _anim_loop(self):
+    """High-frequency animation — moves canvas items only, no API calls."""
+    now = time.monotonic()
+    for flight in self.flights.values():
+      flight.animate(now)
+    self.C.after(self._anim_interval_ms, self._anim_loop)
+
   def _update(self):
+
+    # start background fetch (non-blocking if already running)
+    self._start_fetch()
 
     # update tiles
     now = int(time.time())
@@ -159,40 +197,41 @@ class FlightTracker(tk.Tk):
       self.homeRadarIndex = self.tiles.homeRadarIndex
       self.tileTs = tilets_
 
-    # get local flights in sight
-    flights = self.getFlightsData()
-
-    # cycle through all flights
+    # consume pending flight data produced by background thread
     flight_ids = list()
-    for fl in flights:
-      id = fl.id
-      if id not in self.flights:
-        # create flight object using factory
-        self.flights[id] = self._flight_factory.create(
-            offsets=self._flight_offsets,
-            zoom=self.zoom,
-            max_flight_age=self.maxFlightAge
-        )
+    if self._pending_flights is not None:
+      flights = self._pending_flights
+      self._pending_flights = None
 
-      # update object with new details
-      self.flights[id].update(fl, now)
+      # cycle through all flights
+      for fl in flights:
+        id = fl.id
+        if id not in self.flights:
+          # create flight object using factory
+          self.flights[id] = self._flight_factory.create(
+              offsets=self._flight_offsets,
+              zoom=self.zoom,
+              max_flight_age=self.maxFlightAge
+          )
 
-      # check maximum processing period
-      delta = int((self.timestep-(time.time()-self.now))*1000)
-      if delta < 50:
-        # loop takes too long, breaking up here for now
-        break
+        # update object with new details
+        self.flights[id].update(fl, now)
 
-      flight_ids.append(id)
-      #self.trails[id].update()
-    # END cycle through all flights
+        # check maximum processing period
+        delta = int((self.timestep-(time.time()-self.now))*1000)
+        if delta < 50:
+          # loop takes too long, breaking up here for now
+          break
+
+        flight_ids.append(id)
+      # END cycle through all flights
 
     # lift all plane icons, update old flights
     for id in list(self.flights.keys()):
       if now - self.flights[id].last_seen() > self.maxFlightAge:
         # delete flight if no new data arrived for more than 5 minutes
         # reason: either out of range or landed
-        self.flights[id].cleanup()
+        self.flights[id].destroy()
         del self.flights[id]
       else:
         if id not in flight_ids:

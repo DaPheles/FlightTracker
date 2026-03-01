@@ -44,6 +44,8 @@ class FlightTrackerConfig:
     max_flight_age: int = 1200
     enable_rain_radar: bool = False
     enable_cloud_radar: bool = False
+    enable_ekf: bool = True
+    animation_rate: float = 5.0
 
 
 @dataclass
@@ -55,6 +57,8 @@ class FollowFlightConfig:
     max_trail: int = 150
     enable_rain_radar: bool = False
     enable_cloud_radar: bool = False
+    enable_ekf: bool = True
+    animation_rate: float = 5.0
 
 
 @dataclass
@@ -194,6 +198,8 @@ class ConfigManager:
             max_flight_age=parser.getint(section_name, 'maxFlightAge') if 'maxFlightAge' in section else config.max_flight_age,
             enable_rain_radar=parser.getboolean(section_name, 'enableRainRadar') if 'enableRainRadar' in section else config.enable_rain_radar,
             enable_cloud_radar=parser.getboolean(section_name, 'enableCloudRadar') if 'enableCloudRadar' in section else config.enable_cloud_radar,
+            enable_ekf=parser.getboolean(section_name, 'enableEkf') if 'enableEkf' in section else config.enable_ekf,
+            animation_rate=parser.getfloat(section_name, 'animationRate') if 'animationRate' in section else config.animation_rate,
         )
 
     def _load_follow_flight_config(self, parser: ConfigParser) -> FollowFlightConfig:
@@ -215,6 +221,8 @@ class ConfigManager:
             max_trail=parser.getint(section_name, 'maxtrail') if 'maxtrail' in section else config.max_trail,
             enable_rain_radar=parser.getboolean(section_name, 'enableRainRadar') if 'enableRainRadar' in section else config.enable_rain_radar,
             enable_cloud_radar=parser.getboolean(section_name, 'enableCloudRadar') if 'enableCloudRadar' in section else config.enable_cloud_radar,
+            enable_ekf=parser.getboolean(section_name, 'enableEkf') if 'enableEkf' in section else config.enable_ekf,
+            animation_rate=parser.getfloat(section_name, 'animationRate') if 'animationRate' in section else config.animation_rate,
         )
 
 

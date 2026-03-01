@@ -19,10 +19,8 @@ class Trails(object):
         self.centerview = centerview
 
         self.trail = list()
-        if fr_api:
-            self.trail = self.getFlightHistory()
-        self.trailHQ = len(self.trail)
-        self.updateTS = -1
+        self.trailHQ = 0
+        self.updateTS = -1   # triggers getFlightHistory() on first update() call
         self.updateTick = 0
         self.timegap = 1
     
@@ -94,11 +92,17 @@ class Trails(object):
         # get full flight history on first update() call
         if self.fr_api:
             if self.updateTS < 0:
-                #self.trail = self.fr_api.get_flight_details(self.flight)
-                try:
-                    self.trail = self.getFlightHistory()
-                except Exception:
-                    return list()
+                if details and 'trail' in details and details['trail']:
+                    # Bootstrap directly from already-fetched details — no extra API call
+                    raw = sorted(details['trail'], key=lambda p: p['ts'])
+                    self.trail = [(p['ts'], p['lat'], p['lng']) for p in raw]
+                    if len(self.trail) > self.maxTrail:
+                        del self.trail[:len(self.trail) - self.maxTrail]
+                else:
+                    try:
+                        self.trail = self.getFlightHistory()
+                    except Exception:
+                        return list()
                 self.trailHQ = len(self.trail)
                 self.updateTS = time.time()
             elif len(details) == 0:
