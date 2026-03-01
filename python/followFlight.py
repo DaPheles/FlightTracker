@@ -97,6 +97,8 @@ class FollowFlight:
     # EKF state (disabled for ISS — its update rate is already 0.25 s)
     self.ekf: FlightEKF = None
     self._raw_trail_ekf: list = []
+    # monotonic timestamp of last position change; used to freeze EKF when stale
+    self._last_new_loc_mono: float = time.monotonic()
 
     self.now = time.time()
     self.past_loc = (initial_flight.latitude, initial_flight.longitude) \
@@ -270,6 +272,7 @@ class FollowFlight:
       tileLoc += f", History: {len(details['trail'])}"
 
     self.past_loc = (lat, lng)
+    self._last_new_loc_mono = time.monotonic()
 
     # EKF update: seed or correct the predictor with the new FR24 measurement
     if self.enableEkf:
@@ -284,8 +287,14 @@ class FollowFlight:
                              smooth_spd, f.altitude, valt_ft_s)
       else:
         self.ekf.step(time.monotonic())
+        self.ekf.adjust_noise(smooth_spd, f.altitude)
         self.ekf.update(f.latitude, f.longitude, smooth_hdg,
                         smooth_spd, f.altitude, valt_ft_s)
+        # Snap position to the latest real measurement so the next prediction
+        # starts from the actual current location, not the Kalman-corrected
+        # blend (which barely moves with the large EKF_R we use for smoothness).
+        # Heading, speed and omega are kept from the Kalman update.
+        self.ekf.snap_position(f.latitude, f.longitude)
 
     # update map tiles, returns new projection parameters onto them
     #self.center, offx, offy = self.tiles.update(x, y, self.zoom)
@@ -480,6 +489,15 @@ class FollowFlight:
   def _anim_loop(self) -> None:
     """High-frequency EKF animation — smooth map panning (centerview) or icon movement."""
     if not self.is_alive:
+      return
+    # Freeze EKF when the flight is offline or no new position has arrived for
+    # 3× the poll interval.  Keep the timestamp fresh so the first real step()
+    # after unfreezing sees a small dt rather than the full freeze duration.
+    loc_age = time.monotonic() - self._last_new_loc_mono
+    if not self.online or loc_age > self.timestep * 3:
+      if self.ekf is not None:
+        self.ekf.step_ts(time.monotonic())
+      self.C.after(self._anim_interval_ms, self._anim_loop)
       return
     if self.ekf is not None and self.icon is not None:
       self.ekf.step(time.monotonic())

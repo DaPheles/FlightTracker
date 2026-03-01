@@ -141,13 +141,27 @@ EKF_RAW_TRAIL_LEN      = 6      # raw FR24 samples to keep for velocity regressi
 # so a detected turn gradually straightens out if not reinforced by new measurements.
 EKF_OMEGA_TAU = 60.0
 
-# Process noise diagonal (lat, lng, hdg, vg, alt, valt, omega)
+# Process noise diagonal — cruise phase (lat, lng, hdg, vg, alt, valt, omega)
+# Small values: EKF trusts its own smooth prediction over noisy raw measurements.
 EKF_Q  = [1e-10, 1e-10, 0.01, 0.01, 0.1, 0.05, 0.05]
 
-# Measurement noise diagonal (lat, lng, hdg, vg, alt) — valt, omega not directly observed
-# Position stds ~30-40 m (realistic for FR24/ADS-B display quantisation).
-# Larger values → smaller Kalman gain → EKF leans on smooth prediction, not raw samples.
+# Process noise diagonal — ground/landing phase
+# Large heading/speed/omega noise so the EKF tracks rapid deceleration and taxiway turns.
+# lat/lng/alt/valt noise unchanged (snap_position handles position; alt continues descent).
+EKF_Q_GROUND = [1e-10, 1e-10, 20.0, 5.0, 0.1, 0.05, 5.0]
+
+# Measurement noise diagonal — cruise phase (lat, lng, hdg, vg, alt)
+# Position stds ~30-40 m: EKF leans on smooth prediction between updates.
 EKF_R  = [(3e-4)**2, (4e-4)**2, 25.0, 4.0, 1e4]
+
+# Measurement noise diagonal — ground/landing phase
+# At low speed the plane barely moves between updates, so position measurements are
+# highly informative relative to the small displacement.  Reduce position noise ~8×.
+EKF_R_GROUND = [(0.8e-4)**2, (1.1e-4)**2, 25.0, 4.0, 1e4]
+
+# Thresholds for landing-phase blend (linear interpolation between cruise and ground)
+EKF_LANDING_ALT_FT  = 5000.0   # altitude below which ground blend starts
+EKF_LANDING_SPD_KTS = 150.0    # speed below which ground blend starts
 
 # Initial state covariance diagonal (lat, lng, hdg, vg, alt, valt, omega)
 EKF_P0 = [(1e-4)**2, (1.5e-4)**2, 225.0, 100.0, 250000.0, 25.0, 9.0]

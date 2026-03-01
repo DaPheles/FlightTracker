@@ -219,6 +219,7 @@ class Flight(object):
                              smooth_spd, fl.altitude, valt_ft_s)
       else:
         self.ekf.step(time.monotonic())   # predict to now before applying measurement
+        self.ekf.adjust_noise(smooth_spd, fl.altitude)
         self.ekf.update(fl.latitude, fl.longitude, smooth_hdg,
                         smooth_spd, fl.altitude, valt_ft_s)
 

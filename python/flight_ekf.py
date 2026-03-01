@@ -17,7 +17,9 @@
 import math
 import time
 import numpy as np
-from constants import EKF_EARTH_RADIUS_M, EKF_Q, EKF_R, EKF_P0, EKF_OMEGA_TAU
+from constants import (EKF_EARTH_RADIUS_M, EKF_Q, EKF_R, EKF_P0, EKF_OMEGA_TAU,
+                       EKF_Q_GROUND, EKF_R_GROUND,
+                       EKF_LANDING_ALT_FT, EKF_LANDING_SPD_KTS)
 
 # Unit conversion helpers
 _KNOTS_TO_MS = 1.852 / 3.6      # 1 knot → m/s  (1.852 km/h / 3.6)
@@ -197,6 +199,39 @@ class FlightEKF:
         dt = now - self._ts
         self._ts = now
         self.predict(dt)
+
+    def adjust_noise(self, spd_kts: float, alt_ft: float) -> None:
+        """Blend Q and R between cruise and ground/landing parameters.
+
+        As altitude drops below EKF_LANDING_ALT_FT or speed drops below
+        EKF_LANDING_SPD_KTS the EKF transitions toward ground-mode noise:
+          - Q heading/speed/omega increase → tracks rapid deceleration and turns
+          - R position decreases → trusts measurements more at low speed
+
+        phase=0: cruise  phase=1: fully on ground
+        """
+        phase_alt = max(0.0, min(1.0, 1.0 - alt_ft  / EKF_LANDING_ALT_FT))
+        phase_spd = max(0.0, min(1.0, 1.0 - spd_kts / EKF_LANDING_SPD_KTS))
+        phase = max(phase_alt, phase_spd)
+
+        if phase == 0.0:
+            return   # cruise: matrices already at default; skip work
+
+        # Blend indices that matter for landing dynamics: hdg(2), vg(3), omega(6)
+        for i in (2, 3, 6):
+            self._Q_rate[i, i] = EKF_Q[i] + phase * (EKF_Q_GROUND[i] - EKF_Q[i])
+
+        # Blend position measurement noise: lat(0), lng(1)
+        for i in (0, 1):
+            self._R[i, i] = EKF_R[i] + phase * (EKF_R_GROUND[i] - EKF_R[i])
+
+    def step_ts(self, now: float) -> None:
+        """Advance the internal timestamp without predicting.
+
+        Call this while animation is paused so that the next real step()
+        computes a small dt instead of the full freeze duration.
+        """
+        self._ts = now
 
     def snap_position(self, lat: float, lng: float) -> None:
         """Hard-sync position states to exact coordinates (kept for reference)."""
