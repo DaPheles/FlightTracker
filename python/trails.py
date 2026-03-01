@@ -88,6 +88,29 @@ class Trails(object):
           del self.trail[0]
           self.trailHQ -= 1
 
+    def get_coords(self):
+        '''Re-project the stored trail to current screen coordinates (no API calls).'''
+        trail_ = list()
+        tileSize = self.tiles.tileSize
+        tileNum = self.tiles.tileNum
+        z = self.tiles.zoom
+        if self.tiles.center is None or self.tiles.offset is None:
+            return trail_
+        for step in reversed(self.trail):
+            tx, ty = latlngToPixel(step[1:3], z)
+            tilex, tiley = tx // tileSize, ty // tileSize
+            if abs(self.tiles.center[0] - tilex) > tileNum[0] or \
+               abs(self.tiles.center[1] - tiley) > tileNum[1]:
+                break
+            if self.centerview:
+                tx_ = tileSize * (tilex - self.tiles.center[0] + tileNum[0]//2) + (tx % tileSize) - self.tiles.offset[0]
+                ty_ = tileSize * (tiley - self.tiles.center[1] + tileNum[1]//2) + (ty % tileSize) - self.tiles.offset[1]
+            else:
+                tx_ = tileSize * (tilex - self.tiles.center[0] + tileNum[0]//2) + (tx % tileSize)
+                ty_ = tileSize * (tiley - self.tiles.center[1] + tileNum[1]//2) + (ty % tileSize)
+            trail_ += [tx_, ty_]
+        return trail_
+
     def update(self, details=dict()):
         # get full flight history on first update() call
         if self.fr_api:

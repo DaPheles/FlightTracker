@@ -3,6 +3,7 @@
 '''
 
 import time
+import threading
 from PIL import Image, ImageTk
 from coords import *
 from wettercom import WetterComAPI
@@ -11,39 +12,53 @@ import numpy as np
 
 CLOUDS_ALPHA = 0.6
 DEBUG = False
+MAX_PIL_CACHE = 128   # composited tile images kept in memory
+
 
 class Tiles(object):
-    def __init__(self, canvas, tileSize:int, tileNum, style:dict, zoom, home, centerview=True):
+    def __init__(self, canvas, tileSize: int, tileNum, style: dict, zoom, home, centerview=True):
         self.C = canvas
         self.tileSize_ = tileSize
         self.tileNum_ = tileNum
         self.style = style
+        # bgImg: (tx,ty,z) -> ImageTk.PhotoImage  — keeps Tkinter reference alive
+        # tiles: (tx,ty,z) -> canvas item id
         self.bgImg = dict()
         self.tiles = dict()
         self.zoom_ = zoom
         self.centerview = centerview
 
-        self.homeX_,self.homeY_ = latlngToPixel(home, zoom)
+        self.homeX_, self.homeY_ = latlngToPixel(home, zoom)
         self.center_ = None
         self.offset_ = None
         self.homeRadarIndex_ = 0
 
-        self.localeLang = 'en'      # English per default
-        self.localeCountry = 'GB'   # GreatBritain per default
-        self.enableClouds = False   # disabled by default
-        self.enableRadar  = False   # disabled by default
+        self.localeLang = 'en'
+        self.localeCountry = 'GB'
+        self.enableClouds = False
+        self.enableRadar = False
 
-        # bind Wetter.com API for optional rain/cloud overlays
         self.wc = WetterComAPI()
         self.gm = GoogleMapsAPI()
 
         self.focus_ = None
         if centerview:
-            # set HOME focus
-            sx = tileNum[0]*tileSize/2
-            sy = tileNum[1]*tileSize/2
-            self.focus_ = self.C.create_oval([sx-5,sy-5,sx+5,sy+5], fill='#FFAA66', tags='home', width=2)
+            sx = tileNum[0] * tileSize / 2
+            sy = tileNum[1] * tileSize / 2
+            self.focus_ = self.C.create_oval(
+                [sx - 5, sy - 5, sx + 5, sy + 5], fill='#FFAA66', tags='home', width=2
+            )
 
+        # in-memory composited PIL image cache: (tx, ty, z, ts_5min) -> PIL Image
+        self._pil_cache: dict = {}
+        self._cfg_sig = None        # (basemap, roadmap, brightness, clouds, radar)
+        self._refresh_gen: int = 0  # incremented each refreshTiles call
+        self._required_keys: set = set()   # (tx,ty,z) currently expected on canvas
+        self._tile_ts: int = 0      # ts_5min used in last refreshTiles
+
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
     @property
     def tileSize(self):
         return self.tileSize_
@@ -68,16 +83,16 @@ class Tiles(object):
     def focus(self):
         return self.focus_
 
+    @property
+    def homeRadarIndex(self):
+        return self.homeRadarIndex_
+
     def toggleClouds(self):
         self.enableClouds = not self.enableClouds
 
     def toggleRadar(self):
         self.enableRadar = not self.enableRadar
 
-    @property
-    def homeRadarIndex(self):
-        return self.homeRadarIndex_
-    
     def setLocale(self, lang, country):
         self.localeLang = lang
         self.localeCountry = country
@@ -85,7 +100,10 @@ class Tiles(object):
             self.wc.setLocale(lang, country)
         if self.gm:
             self.gm.setLocale(lang, country)
-    
+
+    # ------------------------------------------------------------------
+    # Tile image composition (unchanged public API)
+    # ------------------------------------------------------------------
     def getTile(self, x, y, z, ts=None):
         '''
         Downloads a map tile image and store in tile cache. If already available, load the stored image.
@@ -96,10 +114,10 @@ class Tiles(object):
 
         @return the binary image data
         '''
-        x = x%(2**z)
-        if y < 0 or y >= 2**z:
-            return Image.fromarray(np.full((self.tileSize_,self.tileSize_), 128, dtype=np.uint8))
-        
+        x = x % (2 ** z)
+        if y < 0 or y >= 2 ** z:
+            return Image.fromarray(np.full((self.tileSize_, self.tileSize_), 128, dtype=np.uint8))
+
         img = self.gm.getTileImage(x, y, z, self.tileSize_, self.style['basemap'], debug=DEBUG)
         if self.style['roadmap']:
             img_overlay = self.gm.getTileImage(x, y, z, self.tileSize_, 'roadmap', debug=DEBUG)
@@ -107,16 +125,16 @@ class Tiles(object):
 
         # brightness adjust
         img_ = np.array(img)
-        img_[:,:,:3] = (img_[:,:,:3]*self.style['brightness']).astype(np.uint8)
+        img_[:, :, :3] = (img_[:, :, :3] * self.style['brightness']).astype(np.uint8)
         img = Image.fromarray(img_)
-        
+
         # render cloud radar overlay with zoom levels smaller or equal 13 only
         if self.enableClouds and z <= 13:
             if DEBUG: print(f"Tiles::getTile(): Trying to get cloud image for x={x}, y={y}, z={z}")
             img_overlay = self.wc.getCloudImage(x, y, z)
             if img_overlay:
                 img_overlay_ = np.array(img_overlay).astype(np.float32)
-                img_overlay_[:,:,3] -= img_overlay_[:,:,3]*(1-CLOUDS_ALPHA)
+                img_overlay_[:, :, 3] -= img_overlay_[:, :, 3] * (1 - CLOUDS_ALPHA)
                 img_overlay = Image.fromarray(img_overlay_.astype(np.uint8))
 
                 img = Image.fromarray(img_)
@@ -125,11 +143,11 @@ class Tiles(object):
 
         # render rain radar overlay with zoom levels smaller or equal 13 only
         if self.enableRadar and z <= 13:
-            if ts == None:
+            if ts is None:
                 ts_ = int(time.time())
             else:
                 ts_ = ts
-            ts_ = ts_-(ts_%300)  # 5 min granularity
+            ts_ = ts_ - (ts_ % 300)  # 5 min granularity
 
             self.wc.setRadarTimestamp(ts_)
 
@@ -137,92 +155,212 @@ class Tiles(object):
             img_overlay = self.wc.getRadarImage(x, y, z, ts_)
             if img_overlay:
                 # returned image is 512x512, needs further subtiling!
-                tilex, tiley = 256*(x%2), 256*(y%2)
-                
-                # TODO: make it nicer with ALPHA blending
-                img_overlay = img_overlay.crop((tilex, tiley, tilex+256, tiley+256))
+                tilex, tiley = 256 * (x % 2), 256 * (y % 2)
+
+                img_overlay = img_overlay.crop((tilex, tiley, tilex + 256, tiley + 256))
                 img_overlay_ = np.array(img_overlay).astype(np.uint16)
 
                 # get radar index of home location
-                if x == self.homeX_//256 and y == self.homeY_//256:
-                    self.homeRadarIndex_ = img_overlay_[self.homeY_%256, self.homeX_%256, 2]  # blue channel of HOME pixel
-                
-                img_[:,:,0] = np.clip(img_[:,:,0].astype(np.int16) -
-                                    img_overlay_[:,:,2],0,255).astype(np.uint8)
-                img_[:,:,1] = np.clip(img_[:,:,1].astype(np.int16) - 
-                                    img_overlay_[:,:,2],0,255).astype(np.uint8)
-                img_[:,:,2] = np.clip(img_[:,:,2].astype(np.int16) + 
-                                    img_overlay_[:,:,2]*4,0,255).astype(np.uint8)
+                if x == self.homeX_ // 256 and y == self.homeY_ // 256:
+                    self.homeRadarIndex_ = img_overlay_[self.homeY_ % 256, self.homeX_ % 256, 2]
+
+                img_[:, :, 0] = np.clip(img_[:, :, 0].astype(np.int16) -
+                                        img_overlay_[:, :, 2], 0, 255).astype(np.uint8)
+                img_[:, :, 1] = np.clip(img_[:, :, 1].astype(np.int16) -
+                                        img_overlay_[:, :, 2], 0, 255).astype(np.uint8)
+                img_[:, :, 2] = np.clip(img_[:, :, 2].astype(np.int16) +
+                                        img_overlay_[:, :, 2] * 4, 0, 255).astype(np.uint8)
                 img = Image.fromarray(img_)
 
         return img
 
-    def refreshTiles(self, x, y, z):
-        # clean-up
-        for k in self.bgImg.keys():
-            self.C.delete(self.bgImg[k])
-            self.C.delete(self.tiles[k])
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+    def _cfg_signature(self):
+        '''Return a tuple that uniquely identifies the current rendering config.'''
+        return (
+            self.style['basemap'],
+            self.style.get('roadmap', False),
+            self.style.get('brightness', 1.0),
+            self.enableClouds,
+            self.enableRadar,
+        )
 
-        # get current timestamp for all tiles
+    def _tile_screen_pos(self, tx, ty):
+        '''
+        Compute screen top-left (x, y) for tile (tx, ty) given current center and offset.
+        Returns None if center is not yet set.
+        '''
+        if self.center_ is None or self.offset_ is None:
+            return None
+        tileSize = self.tileSize_
+        tileNum = self.tileNum_
+        shiftX = tileNum[0] // 2
+        shiftY = tileNum[1] // 2
+        cx, cy = self.center_
+        offx, offy = self.offset_
+        screen_x = (tx - cx + shiftX) * tileSize - offx
+        screen_y = (ty - cy + shiftY) * tileSize - offy
+        return screen_x, screen_y
+
+    def _create_canvas_item(self, tx, ty, tz, tk_img):
+        '''Create a canvas image item for tile (tx, ty, tz). Returns canvas item id.'''
+        pos = self._tile_screen_pos(tx, ty)
+        if pos is None:
+            pos = (0, 0)
+        return self.C.create_image(pos[0], pos[1], image=tk_img, anchor='nw')
+
+    def _load_tile_bg(self, tx, ty, tz, ts, gen):
+        '''Background thread: compose tile image, cache it, then schedule canvas creation.'''
+        try:
+            img = self.getTile(tx, ty, tz, ts)
+        except Exception:
+            return
+        # Store in PIL cache — CPython GIL makes single dict writes atomic
+        cache_key = (tx, ty, tz, ts)
+        if len(self._pil_cache) >= MAX_PIL_CACHE:
+            self._pil_cache.pop(next(iter(self._pil_cache)), None)
+        self._pil_cache[cache_key] = img
+        # Hand off to main thread for canvas operations
+        self.C.after(0, lambda: self._apply_bg_tile(tx, ty, tz, img, gen))
+
+    def _apply_bg_tile(self, tx, ty, tz, img, gen):
+        '''Main thread callback: create canvas item for a background-loaded tile.'''
+        if gen != self._refresh_gen:
+            return   # stale generation, view has moved on
+        key = (tx, ty, tz)
+        if key not in self._required_keys:
+            return   # tile no longer needed
+        if key in self.tiles:
+            return   # already created (two threads raced for same tile)
+
+        tk_img = ImageTk.PhotoImage(img)
+        self.bgImg[key] = tk_img
+        item = self._create_canvas_item(tx, ty, tz, tk_img)
+        self.tiles[key] = item
+        self.C.lower(item)
+
+        # If centerview, position it precisely (update() won't be called again immediately)
+        if self.centerview:
+            pos = self._tile_screen_pos(tx, ty)
+            if pos is not None:
+                try:
+                    self.C.moveto(item, pos[0], pos[1])
+                except Exception:
+                    pass
+
+    # ------------------------------------------------------------------
+    # Core refresh / update
+    # ------------------------------------------------------------------
+    def refreshTiles(self, cx, cy, z):
+        '''
+        Reload map tiles for center tile (cx, cy) at zoom z.
+        Reuses existing canvas tiles that are still in view; loads new ones
+        (synchronously from PIL cache, or asynchronously from disk/network).
+        '''
         ts = int(time.time())
-        ts = ts-(ts%300)  # 5 min granularity
+        ts = ts - (ts % 300)   # 5 min granularity
+        self._tile_ts = ts
 
-        # reload canvas tiles
         if self.enableClouds:
             self.wc.updateCloudUrl()
 
         tileSize = self.tileSize_
         tileNum = self.tileNum_
-        shiftX = tileNum[0]//2
-        shiftY = tileNum[1]//2
+        shiftX = tileNum[0] // 2
+        shiftY = tileNum[1] // 2
         inc = 0 if not self.centerview else 1
-        for j in range(tileNum[1]+inc):
-            for i in range(tileNum[0]+inc):
-                image = ImageTk.PhotoImage(self.getTile(x+i-shiftX, y+j-shiftY, z, ts))
-                self.bgImg[f'{j}{i}'] = image
-                self.tiles[f'{j}{i}'] = self.C.create_image(tileSize*(i+0.5), tileSize*(j+0.5), image=image)
 
-        for k in self.bgImg.keys():
-            self.C.lower(self.bgImg[k])
-            self.C.lower(self.tiles[k])
+        # Compute the set of tile coordinates required for this view
+        required: set = set()
+        for j in range(tileNum[1] + inc):
+            for i in range(tileNum[0] + inc):
+                required.add((cx + i - shiftX, cy + j - shiftY, z))
+        self._required_keys = required
+
+        # If rendering config changed, invalidate PIL cache and drop all canvas tiles
+        sig = self._cfg_signature()
+        if self._cfg_sig != sig:
+            self._pil_cache.clear()
+            self._cfg_sig = sig
+            for item in self.tiles.values():
+                self.C.delete(item)
+            self.tiles.clear()
+            self.bgImg.clear()
+
+        # Remove canvas tiles that have scrolled out of view
+        stale = set(self.tiles.keys()) - required
+        for key in stale:
+            self.C.delete(self.tiles.pop(key))
+            self.bgImg.pop(key, None)
+
+        # Bump generation counter so any in-flight background loads for the old view are discarded
+        self._refresh_gen += 1
+        gen = self._refresh_gen
+
+        # Load tiles not yet on canvas
+        new_keys = required - set(self.tiles.keys())
+        for tx, ty, tz in new_keys:
+            cache_key = (tx, ty, tz, ts)
+            if cache_key in self._pil_cache:
+                # Fast path: already composited — create canvas item immediately
+                tk_img = ImageTk.PhotoImage(self._pil_cache[cache_key])
+                self.bgImg[(tx, ty, tz)] = tk_img
+                item = self._create_canvas_item(tx, ty, tz, tk_img)
+                self.tiles[(tx, ty, tz)] = item
+            else:
+                # Slow path: load in background thread
+                threading.Thread(
+                    target=self._load_tile_bg,
+                    args=(tx, ty, tz, ts, gen),
+                    daemon=True,
+                ).start()
+
+        # Lower all tile canvas items below flight icons
+        for item in self.tiles.values():
+            self.C.lower(item)
 
     def update(self, x, y, z, force=False):
         self.zoom_ = z
         tileSize = self.tileSize_
         tileNum = self.tileNum_
+
         if self.centerview:
-            # airplane is always in the center of the window, map tile move
-            if tileNum[0]&1 == 0:
-                x_, offx = x//tileSize, x%tileSize
+            if tileNum[0] & 1 == 0:
+                x_, offx = x // tileSize, x % tileSize
             else:
-                x_, offx = (x-tileSize//2)//tileSize, (x-tileSize//2)%tileSize
-            if tileNum[1]&1 == 0:
-                y_, offy = y//tileSize, y%tileSize
+                x_, offx = (x - tileSize // 2) // tileSize, (x - tileSize // 2) % tileSize
+            if tileNum[1] & 1 == 0:
+                y_, offy = y // tileSize, y % tileSize
             else:
-                y_, offy = (y-tileSize//2)//tileSize, (y-tileSize//2)%tileSize
+                y_, offy = (y - tileSize // 2) // tileSize, (y - tileSize // 2) % tileSize
         else:
-            # airplane moves inside the inner static maps tile
-            if tileNum[0]&1 == 0:
-                x_, offx = (x+tileSize//2)//tileSize, (x+tileSize//2)%tileSize
+            if tileNum[0] & 1 == 0:
+                x_, offx = (x + tileSize // 2) // tileSize, (x + tileSize // 2) % tileSize
             else:
-                x_, offx = x//tileSize, x%tileSize
-            if tileNum[1]&1 == 0:
-                y_, offy = (y+tileSize//2)//tileSize, (y+tileSize//2)%tileSize
+                x_, offx = x // tileSize, x % tileSize
+            if tileNum[1] & 1 == 0:
+                y_, offy = (y + tileSize // 2) // tileSize, (y + tileSize // 2) % tileSize
             else:
-                y_, offy = y//tileSize, y%tileSize
-        
+                y_, offy = y // tileSize, y % tileSize
+
         self.offset_ = (offx, offy)
 
-        if self.center_ != (x_,y_) or force:
-            self.center_ = (x_,y_)
-            self.refreshTiles(x_,y_,z)
+        if self.center_ != (x_, y_) or force:
+            self.center_ = (x_, y_)
+            self.refreshTiles(x_, y_, z)
 
         if self.centerview:
-            for y in range(tileNum[1]+1):
-                for x in range(tileNum[0]+1):
-                    x_ = tileSize*x-offx
-                    y_ = tileSize*y-offy
-                    self.C.moveto(self.tiles[f'{y}{x}'], x_, y_)
+            shiftX = tileNum[0] // 2
+            shiftY = tileNum[1] // 2
+            cx, cy = self.center_
+            for (tx, ty, tz), item in list(self.tiles.items()):
+                if tz != z:
+                    continue
+                screen_x = (tx - cx + shiftX) * tileSize - offx
+                screen_y = (ty - cy + shiftY) * tileSize - offy
+                self.C.moveto(item, screen_x, screen_y)
 
     def getPlanePos(self):
         '''
@@ -231,11 +369,11 @@ class Tiles(object):
         @return the binary image data
         '''
         if self.centerview:
-            sx = self.tileSize_*self.tileNum_[0]/2
-            sy = self.tileSize_*self.tileNum_[1]/2
+            sx = self.tileSize_ * self.tileNum_[0] / 2
+            sy = self.tileSize_ * self.tileNum_[1] / 2
         else:
-            sx = self.tileSize_*self.tileNum_[0]//2 + self.offset_[0]
-            sy = self.tileSize_*self.tileNum_[1]//2 + self.offset_[1]
-            sx -= self.tileSize_//2
-            sy -= self.tileSize_//2
-        return sx,sy
+            sx = self.tileSize_ * self.tileNum_[0] // 2 + self.offset_[0]
+            sy = self.tileSize_ * self.tileNum_[1] // 2 + self.offset_[1]
+            sx -= self.tileSize_ // 2
+            sy -= self.tileSize_ // 2
+        return sx, sy

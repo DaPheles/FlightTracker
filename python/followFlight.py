@@ -485,8 +485,30 @@ class FollowFlight:
       self.ekf.step(time.monotonic())
       ekf_x, ekf_y = worldToPixel(lngToXWorld(self.ekf.lng),
                                    latToYWorld(self.ekf.lat), self.zoom)
+      # snapshot center/offset before update so we can compute the delta
+      prev_center = self.tiles.center
+      prev_offset = self.tiles.offset
       # tiles.update() repositions tile images (no new downloads unless tile index changes)
       self.tiles.update(ekf_x, ekf_y, self.zoom)
+
+      # keep the trail aligned with the shifted map tiles
+      if self.centerview and prev_offset is not None:
+        if self.tiles.center != prev_center:
+          # center tile changed (rare): full reproject from lat/lng
+          trail = self.trails.get_coords()
+          if len(trail) >= 4:
+            self.C.coords(self.trailPoly, trail)
+        elif self.tiles.offset != prev_offset:
+          # same center tile: translate existing canvas coords by offset delta (fast)
+          doffx = self.tiles.offset[0] - prev_offset[0]
+          doffy = self.tiles.offset[1] - prev_offset[1]
+          trail = list(self.C.coords(self.trailPoly))
+          if len(trail) >= 4:
+            for i in range(0, len(trail), 2):
+              trail[i] -= doffx
+              trail[i + 1] -= doffy
+            self.C.coords(self.trailPoly, trail)
+
       sx, sy = self.tiles.getPlanePos()
       try:
         self.C.coords(self.icon, sx, sy)

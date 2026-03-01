@@ -9,18 +9,28 @@ from logger import get_logger
 
 logger = get_logger(__name__)
 
+MAX_RAW_CACHE = 256   # raw (unprocessed) tile images kept in memory
+
+
 class GoogleMapsAPI(object):
     def __init__(self):
         self.cachePath = Path("cache") / "tiles"
         self.localeLang = 'en'
         self.localeCountry = 'GB'
         self.server = 0
+        # in-memory raw tile cache: (x, y, z, style) -> PIL Image (RGBA, unmodified)
+        self._raw_cache: dict = {}
 
     def setLocale(self, lang, country):
         self.localeLang = lang
         self.localeCountry = country
 
     def getTileImage(self, x, y, z, tileSize, style, debug=False):
+        # check in-memory raw cache first (avoids disk I/O when tile was recently loaded)
+        raw_key = (x, y, z, style)
+        if raw_key in self._raw_cache:
+            return self._raw_cache[raw_key].copy()
+
         tile_dir = self.cachePath / style / str(z)
 
         # check for subfolders and create them if not available
@@ -92,5 +102,10 @@ class GoogleMapsAPI(object):
         else:
             # if filename exists: load as RGBA image
             img = Image.open(filepath, formats=["jpeg","png"]).convert("RGBA")
+
+        # store in raw cache (copy so callers can freely mutate the returned image)
+        if len(self._raw_cache) >= MAX_RAW_CACHE:
+            self._raw_cache.pop(next(iter(self._raw_cache)), None)
+        self._raw_cache[raw_key] = img.copy()
 
         return img
