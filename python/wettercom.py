@@ -19,7 +19,7 @@ class WetterComAPI:
         self.localeCountry = 'GB'
         self.cloudUrl = None
         self.cloudTs = 0
-        self.cachePath = Path("cache") / "wetter.com"
+        self.cachePath = Path(".cache") / "wetter.com"
 
     def setLocale(self, lang, country):
         self.localeLang = lang

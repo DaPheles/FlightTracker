@@ -14,7 +14,7 @@ MAX_RAW_CACHE = 256   # raw (unprocessed) tile images kept in memory
 
 class GoogleMapsAPI(object):
     def __init__(self):
-        self.cachePath = Path("cache") / "tiles"
+        self.cachePath = Path(".cache") / "tiles"
         self.localeLang = 'en'
         self.localeCountry = 'GB'
         # in-memory raw tile cache: (x, y, z, style) -> PIL Image (RGBA, unmodified)
