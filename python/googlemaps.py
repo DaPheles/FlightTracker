@@ -17,7 +17,6 @@ class GoogleMapsAPI(object):
         self.cachePath = Path("cache") / "tiles"
         self.localeLang = 'en'
         self.localeCountry = 'GB'
-        self.server = 0
         # in-memory raw tile cache: (x, y, z, style) -> PIL Image (RGBA, unmodified)
         self._raw_cache: dict = {}
 
@@ -42,46 +41,14 @@ class GoogleMapsAPI(object):
                 "accept": "image/avif,image/webp,*/*",
                 "accept-encoding": "gzip, br",
                 "accept-language": f"{self.localeLang}-{self.localeCountry},en-US;q=0.7,en;q=0.3",
-                "user-agent": "Mozilla/5.0 (Windows NT 6.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36"
+                "user-agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:150.0) Gecko/20100101 Firefox/150.0"
             }
 
             # get missing tile from google maps
             if style == "satellite":
-                #headers = {
-                #    "accept": "image/avif,image/webp,*/*",
-                #    "accept-encoding": "gzip, br",
-                #    "accept-language": f"{self.localeLang}-{self.localeCountry};q=0.7,en;q=0.3",
-                #    "cache-control": "no-cache",
-                #    "connection": "keep-alive",
-                #    "host": f"khms{self.server}.googleapis.com",
-                #    "alt-used": f"khms{self.server}.googleapis.com",
-                #    "sec-fetch-dest": "image",
-                #    "sec-fetch-mode": "no-cors",
-                #    "sec-fetch-site": "cross-site",
-                #    "pragma": "no-cache",
-                #    "upgrade-insecure-requests": "1"
-                #}
-                v = 997     # API version, may be incremented from time to time
-                headers = {
-                    "accept": "image/avif,image/webp,*/*",
-                    "accept-encoding": "gzip, br",
-                    "accept-language": f"{self.localeLang}-{self.localeCountry},en-US;q=0.7,en;q=0.3",
-                    "cache-control": "no-cache",
-                    "connection": "keep-alive",
-                    "host": f"khms{self.server}.googleapis.com",
-                    "alt-used": f"khms{self.server}.googleapis.com",
-                    "sec-fetch-dest": "image",
-                    "sec-fetch-mode": "no-cors",
-                    "sec-fetch-site": "cross-site",
-                    "pragma": "no-cache",
-                    "te": "trailers",
-                    "upgrade-insecure-requests": "1",
-                    "user-agent": "Mozilla/5.0 (Windows NT 6.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36"
-                }
-                url = f"https://khms{self.server}.googleapis.com/kh?v={v}&hl=en&x={x}&y={y}&z={z}"
-                self.server = 1 - self.server   # toggle 0-1-0-1
+                url = f"https://maps.googleapis.com/maps/vt/lyrs=s?x={x}&y={y}&z={z}&scale=1"
             elif style == "terrain":
-                url = f"https://maps.google.com/maps/vt?pb=!1m5!1m4!1i{z}!2i{x}!3i{y}!4i{tileSize}!2m3!1e4!2st!3i639!2m3!1e0!2sr!3i639377937!3m17!2s{self.localeLang}!3s{self.localeCountry}!5e18!12m4!1e8!2m2!1sset!2sTerrain!12m3!1e37!2m1!1ssmartmaps!12m4!1e26!2m2!1sstyles!2zcy50OjMzfHMuZTpsfHAudjpvZmY!4e0!23i1379903"
+                url = f"https://maps.google.com/maps/vt/pb=!1m5!1m4!1i{z}!2i{x}!3i{y}!4i{tileSize}!2m2!1e5!2sshading!2m2!1e6!2scontours!2m3!1e0!2sm!3i768532399!3m7!2s{self.localeLang}!5e1105!12m4!1e68!2m2!1sset!2sTerrain!4e0"
             else:
                 # style == "roadmap"
                 url = f"https://maps.google.com/maps/vt?pb=!1m5!1m4!1i{z}!2i{x}!3i{y}!4i{tileSize}!2m3!1e0!2sm!3i643381729!3m17!2s{self.localeLang}!3s{self.localeCountry}!5e18!12m4!1e68!2m2!1sset!2sRoadmapSatellite!12m3!1e37!2m1!1ssmartmaps!12m4!1e26!2m2!1sstyles!2zcy50OjMzfHMuZTpsfHAudjpvZmY!4e0!23i1379903"

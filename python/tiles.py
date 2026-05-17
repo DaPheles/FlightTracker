@@ -28,7 +28,7 @@ class Tiles(object):
         self.zoom_ = zoom
         self.centerview = centerview
 
-        self.homeX_, self.homeY_ = latlngToPixel(home, zoom)
+        self._home = latlngToPixel(home, zoom)
         self.center_ = None
         self.offset_ = None
         self.homeRadarIndex_ = 0
@@ -161,8 +161,8 @@ class Tiles(object):
                 img_overlay_ = np.array(img_overlay).astype(np.uint16)
 
                 # get radar index of home location
-                if x == self.homeX_ // 256 and y == self.homeY_ // 256:
-                    self.homeRadarIndex_ = img_overlay_[self.homeY_ % 256, self.homeX_ % 256, 2]
+                if x == self._home.x // 256 and y == self._home.y // 256:
+                    self.homeRadarIndex_ = img_overlay_[self._home.y % 256, self._home.x % 256, 2]
 
                 img_[:, :, 0] = np.clip(img_[:, :, 0].astype(np.int16) -
                                         img_overlay_[:, :, 2], 0, 255).astype(np.uint8)

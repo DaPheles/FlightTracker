@@ -8,6 +8,7 @@ from configparser import ConfigParser
 from pathlib import Path
 from typing import Tuple, Optional
 from logger import get_logger
+from coords import LatLng
 
 logger = get_logger(__name__)
 
@@ -23,9 +24,9 @@ class HomeConfig:
     locale_country: str = 'EN'
 
     @property
-    def location(self) -> Tuple[float, float]:
-        """Return (latitude, longitude) tuple."""
-        return (self.latitude, self.longitude)
+    def location(self) -> LatLng:
+        """Return LatLng coordinate."""
+        return LatLng(self.latitude, self.longitude)
 
 
 @dataclass

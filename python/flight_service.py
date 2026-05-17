@@ -7,7 +7,8 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Any, Callable, TypeVar
 from functools import wraps
 import time
-from FlightRadar24_patch.api import FlightRadar24API
+import cloudscraper
+from FlightRadar24.api import FlightRadar24API
 from logger import get_logger
 from constants import MAX_API_RETRIES, RETRY_DELAY_MS
 
@@ -115,6 +116,13 @@ class FlightDataService:
         self._api = api or FlightRadar24API()
         self._api.set_flight_tracker_config(vehicles=0)
         self._details_cache: Dict[str, FlightDetails] = {}
+        self._scraper = cloudscraper.create_scraper(
+            browser={"browser": "chrome", "platform": "windows", "mobile": False}
+        )
+        self._scraper.headers.update({
+            "origin": "https://www.flightradar24.com",
+            "referer": "https://www.flightradar24.com/",
+        })
         self._initialized = True
 
     def get_flights_in_bounds(self, bounds: str) -> List[Any]:
@@ -150,7 +158,10 @@ class FlightDataService:
     @with_retry(default=[])
     def _fetch_flights_by_id(self, bounds: str, flight_id: str) -> List[Any]:
         """Internal method with retry logic for fetching flights by ID."""
-        return self._api.get_flights(bounds=bounds, flight_id=flight_id)
+        try:
+            return self._api.get_flights(bounds=bounds, flight_id=flight_id)
+        except TypeError:
+            return self._api.get_flights(bounds=bounds, id=flight_id)
 
     def get_flight_details(self, flight_id: str, use_cache: bool = True) -> Optional[FlightDetails]:
         """
@@ -177,8 +188,39 @@ class FlightDataService:
     @with_retry(default=None)
     def _fetch_flight_details(self, flight_id: str) -> Optional[Dict]:
         """Internal method with retry logic for fetching flight details."""
-        flight_mock = _FlightMock(flight_id)
-        return self._api.get_flight_details(flight_mock)
+        url = "https://api.flightradar24.com/common/v1/flight-playback.json"
+        resp = self._scraper.get(url, params={"flightId": flight_id, "timestamp": int(time.time())},
+                                 timeout=10)
+        resp.raise_for_status()
+        content = resp.json()
+
+        try:
+            raw = content["result"]["response"]["data"]["flight"]
+        except (KeyError, TypeError):
+            return {}
+
+        track = raw.get("track") or []
+        trail = []
+        for pt in reversed(track):
+            try:
+                trail.append({
+                    "ts":  pt["timestamp"],
+                    "lat": pt["latitude"],
+                    "lng": pt["longitude"],
+                    "alt": pt["altitude"]["feet"],
+                    "hd":  pt["heading"],
+                    "spd": pt["speed"]["kts"],
+                })
+            except (KeyError, TypeError):
+                continue
+        raw["trail"] = trail
+
+        aircraft = raw.get("aircraft") or {}
+        raw["aircraft"] = aircraft
+        if "hex" not in aircraft:
+            aircraft["hex"] = (aircraft.get("identification") or {}).get("modes", "N/A")
+
+        return raw
 
     def get_flight_history(self, flight_id: str) -> List[Dict]:
         """

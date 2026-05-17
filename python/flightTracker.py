@@ -52,7 +52,8 @@ class FlightTracker(tk.Tk):
     self._flight_service = get_flight_service()
 
     # compute pixel position of home location
-    self.homeX, self.homeY = latlngToPixel(self.home, self.zoom)
+    _p = latlngToPixel(self.home, self.zoom)
+    self.homeX, self.homeY = _p.x, _p.y
     # get configuration depending boundaries
     self.bounds = self.getBounds()
     
@@ -87,16 +88,7 @@ class FlightTracker(tk.Tk):
     self._flight_offsets = (self.xSize//2 - self.homeX, self.ySize//2 - self.homeY)
 
     # draw radar
-    radarColor = '#222222'
-    xc,yc=self.xSize//2,self.ySize//2
-    self.C.create_line([xc,0,xc,self.ySize], fill=radarColor)
-    self.C.create_line([0,yc,self.xSize,yc], fill=radarColor)
-    for i in range(1,min(self.mapGrid)):
-      self.C.create_oval([xc-i*self.tileSize//2,yc-i*self.tileSize//2,
-                          xc+i*self.tileSize//2,yc+i*self.tileSize//2], outline=radarColor)
-    i = min(self.mapGrid)
-    self.C.create_oval([xc-i*self.tileSize//2+1,yc-i*self.tileSize//2+1,
-                        xc+i*self.tileSize//2-1,yc+i*self.tileSize//2-1], outline=radarColor, width=2)
+    self._draw_radar()
 
     # temporal buffer init
     self.tts = dict()
@@ -121,31 +113,77 @@ class FlightTracker(tk.Tk):
 
   def getBounds(self):
     distX, distY = (self.mapGrid[0]+1.5)/2 * self.tileSize, (self.mapGrid[1]+1.5)/2 * self.tileSize
-    boundTL = pixelToLatlng((self.homeX-distX, self.homeY-distY), self.zoom)
-    boundBR = pixelToLatlng((self.homeX+distX, self.homeY+distY), self.zoom)
-    return f'{boundTL[0]:.6f},{boundBR[0]:.6f},{boundTL[1]:.6f},{boundBR[1]:.6f}'
+    boundTL = pixelToLatlng(PixelCoord(self.homeX-distX, self.homeY-distY), self.zoom)
+    boundBR = pixelToLatlng(PixelCoord(self.homeX+distX, self.homeY+distY), self.zoom)
+    return f'{boundTL.lat:.6f},{boundBR.lat:.6f},{boundTL.lng:.6f},{boundBR.lng:.6f}'
+
+  def _draw_radar(self):
+    """Draw radar crosshairs and distance circles; clears previous items first."""
+    self.C.delete('radar')
+    radarColor = '#222222'
+    xc, yc = self.xSize // 2, self.ySize // 2
+    self.C.create_line([xc, 0, xc, self.ySize], fill=radarColor, tags='radar')
+    self.C.create_line([0, yc, self.xSize, yc], fill=radarColor, tags='radar')
+    for i in range(1, min(self.mapGrid)):
+      self.C.create_oval([xc-i*self.tileSize//2, yc-i*self.tileSize//2,
+                          xc+i*self.tileSize//2, yc+i*self.tileSize//2],
+                         outline=radarColor, tags='radar')
+    i = min(self.mapGrid)
+    self.C.create_oval([xc-i*self.tileSize//2+1, yc-i*self.tileSize//2+1,
+                        xc+i*self.tileSize//2-1, yc+i*self.tileSize//2-1],
+                       outline=radarColor, width=2, tags='radar')
 
   def toggleFullscreen(self, event):
-    ''' Fullscreen toggle magic, too fuzzy for now to be active '''
+    """Toggle fullscreen mode; recalculates grid, bounds, offsets and reloads tiles."""
+    old_xSize = self.xSize
+    old_ySize = self.ySize
     self.fullscreen = not self.fullscreen
-    #self.update()
+
     if self.fullscreen:
         self.geometrySave = self.wm_geometry()
-        self.resizable(True,True)
+        self._mapGrid_normal = self.mapGrid
+        self.resizable(True, True)
         self.update()
         self.wm_attributes("-fullscreen", True)
         self.xSize = self.winfo_screenwidth()
         self.ySize = self.winfo_screenheight()
-        self.C.configure(width=self.xSize, height=self.ySize)
+        self.mapGrid = (self.xSize // self.tileSize, self.ySize // self.tileSize)
     else:
         self.wm_attributes("-fullscreen", False)
-        self.resizable(False,False)
-        self.xSize = self.tileSize*self.mapGrid[0]
-        self.ySize = self.tileSize*self.mapGrid[1]
-        self.C.configure(width=self.xSize, height=self.ySize)
+        self.resizable(False, False)
+        self.mapGrid = self._mapGrid_normal
+        self.xSize = self.tileSize * self.mapGrid[0]
+        self.ySize = self.tileSize * self.mapGrid[1]
         self.wm_geometry(self.geometrySave)
+
+    self.C.configure(width=self.xSize, height=self.ySize)
+
+    # Update tile grid for new canvas dimensions
+    self.tiles.tileNum_ = self.mapGrid
+
+    # Recalculate flight bounds for new grid coverage
+    self.bounds = self.getBounds()
+
+    # Shift all existing flight canvas items and anchors to new canvas center
+    dx = self.xSize // 2 - old_xSize // 2
+    dy = self.ySize // 2 - old_ySize // 2
+    for flight in self.flights.values():
+        flight.reposition(dx, dy, self.xSize, self.ySize)
+    self._flight_offsets = (self.xSize // 2 - self.homeX, self.ySize // 2 - self.homeY)
+
+    # Move the home-location focus dot to the new canvas centre
+    if self.tiles.focus_ is not None:
+        cx, cy = self.xSize // 2, self.ySize // 2
+        self.C.coords(self.tiles.focus_, cx-5, cy-5, cx+5, cy+5)
+
+    # Redraw radar decorations at new dimensions
+    self._draw_radar()
+
+    # Reload tiles to fill the new canvas
+    self.tiles.update(self.homeX, self.homeY, self.zoom, force=True)
+
     self.update()
-    logger.debug(f"Window size: {self.xSize}x{self.ySize}")
+    logger.debug(f"Window size: {self.xSize}x{self.ySize}, grid: {self.mapGrid}")
               
   def onKey(self, event):
     if event.char == 'c':

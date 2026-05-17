@@ -2,7 +2,7 @@
     Application to follow flights using FlightRadar24 API and Google Maps tiles
 '''
 
-from FlightRadar24_patch.api import FlightRadar24API
+from FlightRadar24.api import FlightRadar24API
 from hover import CanvasToolTip
 from sprites import Sprites
 from tiles import Tiles
@@ -125,10 +125,12 @@ class FollowFlight:
     self.tiles.enableClouds = self.enableClouds
     self.tiles.setLocale(self.localeLang, self.localeCountry)
     if initial_flight is not None:
-      initX, initY = worldToPixel(lngToXWorld(initial_flight.longitude),
-                                   latToYWorld(initial_flight.latitude), self.zoom)
+      _p = worldToPixel(lngToXWorld(initial_flight.longitude),
+                        latToYWorld(initial_flight.latitude), self.zoom)
+      initX, initY = _p.x, _p.y
     else:
-      initX, initY = latlngToPixel(self.home, self.zoom)
+      _p = latlngToPixel(self.home, self.zoom)
+      initX, initY = _p.x, _p.y
     self.tiles.update(initX, initY, self.zoom, force=True)
 
     # trails
@@ -148,6 +150,11 @@ class FollowFlight:
     if self.enableEkf and not self.iss_mode:
       self.C.after(self._anim_interval_ms, self._anim_loop)
     self.is_alive = True
+
+  def _get_raw_details(self, flight_id: str, use_cache: bool = True) -> dict:
+    from flight_service import get_flight_service
+    fd = get_flight_service().get_flight_details(flight_id, use_cache=use_cache)
+    return fd.raw_data if fd else {}
 
   def _destroy(self):
     # try to close both: toplevel window and Followflight class to prevent more updates in undefined states
@@ -178,10 +185,8 @@ class FollowFlight:
       self.top.update()
 
   def getFlightsData(self, bounds):
-    try:
-      return self.fr_api.get_flights(bounds=bounds, flight_id=self.flight)
-    except Exception:
-      return list()
+    from flight_service import get_flight_service
+    return get_flight_service().get_flights_by_id(bounds, self.flight)
 
   def _fetch_bg(self):
     """Background thread: locate flight with expanding bounds and fetch details."""
@@ -219,7 +224,7 @@ class FollowFlight:
               pass
 
           try:
-            details = self.fr_api.get_flight_details(f)
+            details = self._get_raw_details(f.id)
             f.set_flight_details(details)
           except Exception:
             details = {}
@@ -265,7 +270,8 @@ class FollowFlight:
     self.zoom += max(int(18-spd) // 10, 0)
     self.zoom += self.zoom_offset
 
-    x,y = worldToPixel(lngToXWorld(lng), latToYWorld(lat), self.zoom)
+    _p = worldToPixel(lngToXWorld(lng), latToYWorld(lat), self.zoom)
+    x, y = _p.x, _p.y
 
     tileLoc = f"Zoom: {self.zoom}"
     if 'trail' in details:
@@ -423,7 +429,7 @@ class FollowFlight:
             ts, lat, lng = sa_data
             #print("SA",self.flight_icao,lat,lng,sa_data[0])
 
-        details = self.fr_api.get_flight_details(f)
+        details = self._get_raw_details(f.id)
         f.set_flight_details(details)
 
         # skip identical flight data
@@ -454,13 +460,13 @@ class FollowFlight:
   def visualize_iss(self, ts, lat, lng):
     self.zoom = 6 # default ISS zoom
 
-    x,y = worldToPixel(lngToXWorld(lng), latToYWorld(lat), self.zoom)
+    _p = worldToPixel(lngToXWorld(lng), latToYWorld(lat), self.zoom)
 
     self.past_loc = (lat,lng)
 
-    self.latitude = x
-    self.longitude = y
-    self.tiles.update(x, y, self.zoom)
+    self.latitude = _p.x
+    self.longitude = _p.y
+    self.tiles.update(_p.x, _p.y, self.zoom)
     trail = self.trails.update()
 
     if len(trail) >= 4:
@@ -501,8 +507,8 @@ class FollowFlight:
       return
     if self.ekf is not None and self.icon is not None:
       self.ekf.step(time.monotonic())
-      ekf_x, ekf_y = worldToPixel(lngToXWorld(self.ekf.lng),
-                                   latToYWorld(self.ekf.lat), self.zoom)
+      _p = worldToPixel(lngToXWorld(self.ekf.lng), latToYWorld(self.ekf.lat), self.zoom)
+      ekf_x, ekf_y = _p.x, _p.y
       # snapshot center/offset before update so we can compute the delta
       prev_center = self.tiles.center
       prev_offset = self.tiles.offset
@@ -604,10 +610,10 @@ class FollowFlight:
     self.zoom += max(int(18 - spd) // 10, 0)
     self.zoom += self.zoom_offset
 
-    x, y = worldToPixel(lngToXWorld(lng), latToYWorld(lat), self.zoom)
-    self.latitude = x
-    self.longitude = y
-    self.tiles.update(x, y, self.zoom)
+    _p = worldToPixel(lngToXWorld(lng), latToYWorld(lat), self.zoom)
+    self.latitude = _p.x
+    self.longitude = _p.y
+    self.tiles.update(_p.x, _p.y, self.zoom)
 
     sx, sy = self.tiles.getPlanePos()
     if self.icon:
@@ -664,10 +670,10 @@ class FollowFlight:
         details = self.past_details
         if self.online and not ok and self.saveHistory:
           self.saveFlightDetails(details)
-        elif not self.online and self.past_details is None:
+        elif not self.online and self.past_details is None and self.lost_count >= 2:
           logger.info(f'Flight {self.flight} is offline!')
           f = Dict2Class(dict(id=self.flight))
-          details = self.fr_api.get_flight_details(f)
+          details = self._get_raw_details(f.id)
           if self.saveHistory:
             self.saveFlightDetails(details)
 

@@ -1,8 +1,7 @@
 requests>=2.28.0
+cloudscraper>=1.2.60
 pillow>=9.0.0
 opencv-python>=4.5.0
 numpy>=1.21.0
 pyephem>=4.1.0
-# removed for now until pull request is accepted
-# => https://github.com/JeanExtreme002/FlightRadarAPI/pull/86
-#FlightRadarAPI
+FlightRadarAPI @ git+https://github.com/DaPheles/FlightRadarAPI.git#subdirectory=python

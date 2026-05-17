@@ -2,7 +2,7 @@
     helper class to handle airplane flights from FlightRadar24 histories or current locations
 '''
 
-from FlightRadar24_patch.api import FlightRadar24API
+from FlightRadar24.api import FlightRadar24API
 from hover import CanvasToolTip
 import math
 from coords import *
@@ -150,6 +150,24 @@ class Flight(object):
     self._alive = False
     self.cleanup()
 
+  def reposition(self, dx: int, dy: int, new_xsize: int, new_ysize: int) -> None:
+    """Shift all canvas items and position anchors by (dx, dy) after canvas resize."""
+    self.off_x += dx
+    self.off_y += dy
+    self.xSize = new_xsize
+    self.ySize = new_ysize
+    for ts in self.past_loc:
+      x, y = self.past_loc[ts]
+      self.past_loc[ts] = (x + dx, y + dy)
+    if self._anim_sx is not None:
+      self._anim_sx += dx
+      self._anim_sy += dy
+    for item_id in self.objects:
+      try:
+        self.C.move(item_id, dx, dy)
+      except tk.TclError:
+        pass
+
   def init_offsets(self, off_x, off_y) -> None:
     self.off_x = off_x
     self.off_y = off_y
@@ -200,9 +218,8 @@ class Flight(object):
       return
 
     # location and unit conversions
-    sx, sy = latlngToPixel((fl.latitude, fl.longitude), self.zoom)
-    sx += self.off_x
-    sy += self.off_y
+    _p = latlngToPixel(LatLng(fl.latitude, fl.longitude), self.zoom)
+    sx, sy = _p.x + self.off_x, _p.y + self.off_y
     alt_km = ft2km(fl.altitude)
 
     if self._enable_ekf:
@@ -261,9 +278,9 @@ class Flight(object):
     """
     if self.ekf is None or self._anim_sx is None or self._anim_plane_id is None:
       return
-    ekf_sx, ekf_sy = latlngToPixel((self.ekf.lat, self.ekf.lng), self.zoom)
-    ekf_sx = float(ekf_sx + self.off_x)
-    ekf_sy = float(ekf_sy + self.off_y)
+    _p = latlngToPixel(LatLng(self.ekf.lat, self.ekf.lng), self.zoom)
+    ekf_sx = float(_p.x + self.off_x)
+    ekf_sy = float(_p.y + self.off_y)
     dx = ekf_sx - self._anim_sx
     dy = ekf_sy - self._anim_sy
     if abs(dx) > 0.01 or abs(dy) > 0.01:
@@ -355,7 +372,10 @@ class Flight(object):
   def _load_details_bg(self, fl) -> None:
     """Background thread: fetch flight details and schedule apply on main thread."""
     try:
-      details = self.fr_api.get_flight_details(fl)
+      from flight_service import get_flight_service
+      svc = get_flight_service()
+      flight_details = svc.get_flight_details(fl.id, use_cache=False)
+      details = flight_details.raw_data if flight_details else {}
       fl.set_flight_details(details)
     except Exception as e:
       logger.error(f"Failed to get flight details: {e}")
@@ -375,9 +395,8 @@ class Flight(object):
       for point in trail:
         ts_ = point['ts']
         if ts_ > now - self.maxFlightAge:
-          sx_, sy_ = latlngToPixel((point['lat'], point['lng']), self.zoom)
-          sx_ += self.off_x
-          sy_ += self.off_y
+          _p = latlngToPixel(LatLng(point['lat'], point['lng']), self.zoom)
+          sx_, sy_ = _p.x + self.off_x, _p.y + self.off_y
           self.past_loc[ts_] = (sx_, sy_)
           self.past_alt[ts_] = ft2km(point['alt'])
       self.update_about_content(fl, details)
@@ -398,9 +417,8 @@ class Flight(object):
     dst = fl.destination_airport_iata
     hdg = fl.heading
 
-    sx, sy = latlngToPixel((fl.latitude, fl.longitude), self.zoom)
-    sx += self.off_x
-    sy += self.off_y
+    _p = latlngToPixel(LatLng(fl.latitude, fl.longitude), self.zoom)
+    sx, sy = _p.x + self.off_x, _p.y + self.off_y
     alt_km = ft2km(fl.altitude)
     gsp_kmh = kts2kmh(fl.ground_speed)
 
@@ -525,9 +543,8 @@ class Flight(object):
 
     self.ekf.step(now)
 
-    sx_new, sy_new = latlngToPixel((self.ekf.lat, self.ekf.lng), self.zoom)
-    sx_new += self.off_x
-    sy_new += self.off_y
+    _p = latlngToPixel(LatLng(self.ekf.lat, self.ekf.lng), self.zoom)
+    sx_new, sy_new = _p.x + self.off_x, _p.y + self.off_y
     dx = sx_new - self._anim_sx
     dy = sy_new - self._anim_sy
 

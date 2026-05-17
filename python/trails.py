@@ -4,7 +4,7 @@
 
 import json
 import time
-from FlightRadar24_patch.api import FlightRadar24API
+from FlightRadar24.api import FlightRadar24API
 from coords import *
 from tiles import Tiles
 from helper import Dict2Class
@@ -97,7 +97,8 @@ class Trails(object):
         if self.tiles.center is None or self.tiles.offset is None:
             return trail_
         for step in reversed(self.trail):
-            tx, ty = latlngToPixel(step[1:3], z)
+            _p = latlngToPixel(LatLng(step[1], step[2]), z)
+            tx, ty = _p.x, _p.y
             tilex, tiley = tx // tileSize, ty // tileSize
             if abs(self.tiles.center[0] - tilex) > tileNum[0] or \
                abs(self.tiles.center[1] - tiley) > tileNum[1]:
@@ -170,7 +171,8 @@ class Trails(object):
         tileNum  = self.tiles.tileNum
         z = self.tiles.zoom
         for step in reversed(self.trail):
-            tx, ty = latlngToPixel(step[1:3], z)
+            _p = latlngToPixel(LatLng(step[1], step[2]), z)
+            tx, ty = _p.x, _p.y
             tilex, tiley = tx//tileSize, ty//tileSize
             if abs(self.tiles.center[0]-tilex) > tileNum[0] or \
                abs(self.tiles.center[1]-tiley) > tileNum[1]:
